@@ -116,7 +116,7 @@ export function App() {
     <>
       <div className="topbar">
         <span className="brand">
-          <span className="brand-mark">G</span>
+          <span className="brand-mark" />
           GeLi Bot
         </span>
 

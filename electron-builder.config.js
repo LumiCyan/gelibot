@@ -60,8 +60,30 @@ module.exports = {
     ],
     artifactName: 'GeLi Bot v${version}.${ext}',
     icon: 'build/icon.ico',
-    // 没有签名证书，跳过签名环节（否则会尝试下载 winCodeSign）
-    signAndEditExecutable: false,
+
+    /**
+     * 关于图标与签名 —— 这里有个代价很大的坑，务必别改回去。
+     *
+     * 早期为了让打包在受限网络下跑通，设过 `signAndEditExecutable: false`，
+     * 因为不设它会尝试下载 winCodeSign 工具链。但看 app-builder-lib 的源码
+     * （out/winPackager.js signApp）会发现它是一票否决：
+     *
+     *     async signApp(packContext, isAsar) {
+     *       if (this.platformSpecificBuildOptions.signAndEditExecutable === false) {
+     *         return false;                    // <- 直接返回
+     *       }
+     *       ...
+     *       await this.signAndEditResources(...)  // <- 图标写入发生在这里
+     *     }
+     *
+     * 也就是说关掉它 = 连图标都不写，exe 上显示的还是 Electron 默认的电子轨道图标。
+     *
+     * 正确做法是不设这一项，只让签名自然跳过：没有证书时输出
+     * "no signing info identified, signing is skipped"，而图标照常嵌入。
+     * 前置条件是把 winCodeSign 放进缓存（见 scripts/fetch-wincodesign.mjs），
+     * 否则会卡在联网下载。
+     */
+    signAndEditExecutable: true,
   },
 
   portable: {

@@ -112,13 +112,17 @@ npm run dev
 
 ## 打包为 exe
 
-产物：**`GeLi Bot v1.15.0.exe`**（单文件绿色版，93.2 MB / 97,696,286 字节，双击即用）
+产物：**`GeLi Bot v1.15.1.exe`**（单文件绿色版，93 MB / 97,694,598 字节，双击即用）
 ——其中约 60 MB 压缩后来自内置的 SnowLuma 运行包（原始 97 MB）。
 
 ```bash
-npm run dist        # 完整打包
+npm run dist        # 完整打包（= node scripts/build-release.mjs）
 npm run dist:dir    # 只生成免压缩目录，用于快速验证
 ```
+
+> `dist` 走的是 `scripts/build-release.mjs` 而不是裸 `electron-builder`，
+> 因为它会给 app-builder 打一个必要的补丁。原因见下方「图标为什么必须开
+> `signAndEditExecutable`」。
 
 配置见 `electron-builder.config.js`，要点：
 
@@ -130,8 +134,45 @@ npm run dist:dir    # 只生成免压缩目录，用于快速验证
 | `electronDist` | **复用 `node_modules/electron/dist`**，省掉一次 100MB+ 下载 |
 | `files` | 只打 `dist/**` 与 `package.json`，源码/测试/截图/SnowLuma 都不走这里 |
 | `asar: true` | 代码打进 `app.asar`，避免文件散落 |
-| `signAndEditExecutable: false` | 无签名证书，跳过着色签名（否则会尝试联网下载 winCodeSign） |
 | `icon: 'build/icon.ico'` | 7 档尺寸图标（16→256），由 `scripts/make-icon.py` 纯 Python 生成 |
+| `signAndEditExecutable: true` | **必须为 true**。见下方「图标为什么必须开它」 |
+
+### 图标为什么必须开 `signAndEditExecutable`
+
+它不是一个"要不要签名"的开关，而是**图标能否写进 exe** 的总闸。
+看 `app-builder-lib/out/winPackager.js` 的 `signApp()`：
+
+```js
+async signApp(packContext, isAsar) {
+  if (this.platformSpecificBuildOptions.signAndEditExecutable === false) {
+    return false;                          // <- 直接返回
+  }
+  ...
+  await this.signAndEditResources(...)     // <- 图标写入发生在这里
+}
+```
+
+关掉它 = 连图标都不写，exe 上显示的还是 Electron 默认的电子轨道图标。
+
+但打开它会触发解压 `winCodeSign` 工具链，而该归档里有两条 macOS 符号链接
+（`darwin/10.12/lib/libcrypto.dylib`、`libssl.dylib`）。普通 Windows 账户没有创建
+符号链接的权限，`7za` 报「客户端没有所需的特权」并以退出码 2 结束，app-builder 视之为
+失败、重试 3 次后放弃——同样到不了写图标那一步。
+
+解法在 `scripts/build-release.mjs`：`app-builder.exe` 里 `-snld` 字面量只出现一次，
+而 7-Zip 的 `-snl-`（不还原符号链接）恰好也是 5 个 ASCII 字节，于是**原地等长替换**，
+再通过官方环境变量 `CUSTOM_APP_BUILDER_PATH` 指向打补丁后的副本（不改 `node_modules`
+原文件，`npm install` 后依然有效）。被跳过的两条 `.dylib` 是 macOS 构建用的快捷方式，
+Windows 打包只需要 `windows-10/` 与 `rcedit-x64.exe`。
+
+### 校验打包结果
+
+```bash
+python scripts/verify-exe-icon.py "dist-release/win-unpacked/GeLi Bot.exe"
+```
+
+会解析 PE 资源段，列出 `RT_ICON` / `RT_GROUP_ICON` 的尺寸清单，并逐档与
+`build/icon.ico` 比对。期望输出 7 档全部 `OK`，合计与本地一致。
 
 **SnowLuma 为什么放 `extraResources` 而不是 `files`**：它是独立进程（自带 `node.exe`），
 不能进 asar，需要保持可执行的真实文件结构。`portable` 目标会把它一并压进 `app-64.7z`，
@@ -140,8 +181,8 @@ npm run dist:dir    # 只生成免压缩目录，用于快速验证
 **想换内置的 SnowLuma 版本**：把新发行包解压覆盖项目根目录的 `snowluma/` 再打包即可，
 要求目录里有 `index.mjs` 和 `node.exe`。
 
-**受限网络下打包**：electron-builder 默认从 GitHub 拉 NSIS 工具链，必然超时。
-需要把镜像指向 npmmirror：
+**受限网络下打包**：electron-builder 默认从 GitHub 拉工具链，必然超时。
+`scripts/build-release.mjs` 已默认把镜像指向 npmmirror；如需改动：
 
 ```bash
 export ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/
@@ -151,7 +192,7 @@ npm run dist
 **输出目录**：默认 `dist-release/`，可用环境变量覆盖：
 
 ```bash
-GC_OUT_DIR=dist-release-v1150 npm run dist
+GC_OUT_DIR=dist-release-v1151 npm run dist
 ```
 
 **打包前注意**：electron-builder 会先清空输出目录。若上一次的 `win-unpacked/`
@@ -164,9 +205,21 @@ GC_OUT_DIR=dist-release-v1150 npm run dist
 > 有进程持有句柄）。处理方式即上面所述——换新输出目录；残留的旧目录只剩
 > 一个 0 字节占位文件，不影响打包。
 
-**图标**：`scripts/make-icon.py` 不依赖 Pillow，直接手写 ICO/BMP 字节流，
-生成 7 档尺寸（16/24/32/48/64/128/256）的 `build/icon.ico`。
-需要换图标时改脚本里的 `BG` 配色与字母即可重新生成。
+**图标**：全站图标是那只**鸽子**（GeLi = 鸽力）。两个脚本都**不依赖 Pillow**，纯手写
+PNG 解码与 ICO 字节流：
+
+```bash
+python scripts/make-icon.py        # -> build/icon.ico（exe 图标，7 档尺寸）
+python scripts/make-ui-assets.py   # -> src/renderer/assets/（顶栏 brand、窗口图标）
+```
+
+源图是项目外的原图，脚本按 `SRC` 常量指向它。生成时的小尺寸处理与几个坑：
+
+- 源图其实是**动画 PNG**（带 `acTL`/`fcTL`），扩展名却写成 `.jpg`，通用工具会拒解析
+- 背景是**纯水平渐变**（左 `#96ff8f` 绿 → 右 `#8dfffa` 青），不是对角渐变
+- **不能对掩码做闭运算**：眼睛是"背景色镂空"，小尺寸下闭运算会把它填平
+
+尺寸分档：48px 以上完整还原；32px 压掉速度线、保留眼睛；16/24px 裁掉速度线伸出段，只留剪影。
 
 ---
 
@@ -393,9 +446,15 @@ src/
 snowluma/             内置的 SnowLuma 运行包（含自带 node.exe）
 scripts/
   build-renderer.mjs  esbuild 打包渲染进程
-  copy-assets.mjs     静态资源拷贝
+  build-release.mjs   完整打包（给 app-builder 打补丁后调 electron-builder）
+  copy-assets.mjs     静态资源拷贝（含 renderer/assets 下的图标）
   make-icon.py        纯 Python 生成 build/icon.ico（不依赖 Pillow）
-  tests/              三套测试（npm test 运行）
+  make-ui-assets.py   生成界面用图标 PNG（顶栏 brand、窗口图标）
+  verify-exe-icon.py  解析 exe 内嵌图标并与 build/icon.ico 逐档比对
+  ui-screenshot.cjs   用 CDP 启动 Electron 截图，验证 UI 改动
+  fetch-snowluma.mjs  按需下载内置 SnowLuma 运行包
+  fetch-wincodesign.mjs  预置 winCodeSign 工具链到 electron-builder 缓存
+  tests/              多套测试（npm test 运行）
 build/icon.ico        应用图标（electron-builder buildResources）
 docs/screenshots/     界面截图
 electron-builder.config.js  打包配置
@@ -406,7 +465,7 @@ electron-builder.config.js  打包配置
 ## 已验证的行为
 
 搭建过程中对各层链路都做了实测（mock 服务端 + 真实协议封包），
-`npm test` 共 **219 项**断言，另有 2 套可选的**真机**端到端测试（**27 + 21 项**）：
+`npm test` 共 **245 项**断言（76 + 40 + 39 + 64 + 26），另有 2 套可选的**真机**端到端测试（**27 + 21 项**）：
 
 **绑定逻辑 `test-bind.cjs`（76 项）**
 

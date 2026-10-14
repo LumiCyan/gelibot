@@ -224,6 +224,11 @@ function wireEvents(): void {
 }
 
 function createWindow(): void {
+  // 窗口 / 任务栏图标。打包后 exe 已内嵌 icon.ico，但开发模式与
+  // 任务栏小组件仍会读 BrowserWindow 的 icon，所以显式指定一份 PNG。
+  // 资源由 scripts/make-ui-assets.py 生成并随 copy-assets 进 dist。
+  const iconPath = path.join(__dirname, '../renderer/assets/window-256.png');
+
   mainWindow = new BrowserWindow({
     width: 1180,
     height: 820,
@@ -231,6 +236,7 @@ function createWindow(): void {
     minHeight: 640,
     title: 'GeLi Bot 控制台',
     backgroundColor: '#f7f9fc',
+    ...(fs.existsSync(iconPath) ? { icon: iconPath } : {}),
     webPreferences: {
       preload: path.join(__dirname, '../preload/preload.js'),
       contextIsolation: true,

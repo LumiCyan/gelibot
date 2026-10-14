@@ -18,14 +18,15 @@ config/
 # 运行日志（体积大且含账号信息）
 logs/
 
-# 打包输出
-dist-release*/
-
 # 图标预览（由 scripts/make-icon.py 生成，非必需）
 build/icon-preview*.png
 
 # 打包临时目录
 .stage/
+
+# 注意：不要用 `npx asar extract-file <asar> package.json` 在根目录操作，
+# 它会把文件直接写在当前目录，覆盖掉项目自己的 package.json。
+# 要看 asar 内容请用 `npx asar extract <asar> .stage/asar-check`。
 
 # 编辑器 / 系统
 .vscode/
