@@ -1,12 +1,28 @@
 # GeLi Bot — QQ ↔ Minecraft 桥接控制台
 
+<img src="docs/icon.png" width="88" align="right" alt="GeLi Bot 图标 —— 鸽子" />
+
 一个 Windows 桌面端工具：通过 **SnowLuma（OneBot v11）** 接收 QQ 群 / 私聊消息，  
 经权限判定后通过 **RCON** 向 Minecraft Java 服务器投递指令，并管理 QQ 号与游戏玩家 ID 的绑定关系。
+
+> 图标是那只**鸽子** —— 「GeLi」正是「鸽力」的谐音。
 
 **SnowLuma 已内置**：程序里带了一份完整的 SnowLuma 运行包（含自带 `node.exe`），
 在「连接设置」页点一下按钮就能启动它并自动打开管理后台，不用再手工解压、跑 `launcher.bat`。
 
 配色：白色主调，蓝色为主色点缀，浅绿作次色点缀。
+
+---
+
+## 下载
+
+从 [Releases](https://github.com/LumiCyan/gelibot/releases/latest) 取 **`GeLi Bot v1.15.1.exe`**：
+
+- 单文件绿色版，双击即用，无需安装
+- 97,694,598 字节（约 93 MB）
+- Windows 10 / 11 x64
+
+SHA256：`4a107c0d24d8fabd458e4ff968c275b5d106739ac42083e7e071908c1d6baadc`
 
 ---
 
