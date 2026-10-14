@@ -1,0 +1,37 @@
+{
+  "name": "gelibot",
+  "productName": "GeLi Bot",
+  "version": "1.15.0",
+  "description": "GeLi Bot — QQ (SnowLuma/OneBot v11) 与 Minecraft 服务器 RCON 桥接的 Windows 桌面端",
+  "main": "dist/main/main.js",
+  "private": true,
+  "scripts": {
+    "build:main": "tsc -p tsconfig.json",
+    "build:renderer": "node scripts/build-renderer.mjs",
+    "copy": "node scripts/copy-assets.mjs",
+    "build": "npm run build:main && npm run build:renderer && npm run copy",
+    "start": "npm run build && electron .",
+    "dev": "npm run build && electron . --dev",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.renderer.json --noEmit",
+    "test": "npm run build:main && node scripts/tests/test-bind.cjs && node scripts/tests/test-router.cjs && node scripts/tests/test-migrate.cjs && node scripts/tests/test-snowluma.cjs && node scripts/tests/test-onebot-errors.cjs",
+    "dist": "npm run build && electron-builder --config electron-builder.config.js --win",
+    "dist:dir": "npm run build && electron-builder --config electron-builder.config.js --win --dir",
+    "fetch:snowluma": "node scripts/fetch-snowluma.mjs",
+    "icon": "python scripts/make-icon.py"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@types/ws": "^8.5.13",
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8",
+    "esbuild": "^0.24.2",
+    "typescript": "^5.7.2"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "ws": "^8.18.0"
+  }
+}
