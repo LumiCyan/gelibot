@@ -87,9 +87,17 @@ enforce-whitelist=true
 ### 命令行
 
 ```bash
+git clone https://github.com/LumiCyan/gelibot.git
+cd gelibot
 npm install
+npm run fetch:snowluma   # 拉取内置的 SnowLuma 运行包（约 97 MB，未进仓库）
 npm start
 ```
+
+> `npm run fetch:snowluma` 会从 GitHub Releases 下载 SnowLuma 的 `win-x64` 包并解压到
+> `snowluma/`。仓库里不提交这 97 MB 的运行包，所以**克隆后必须跑一次这个命令**，
+> 否则「SnowLuma 启动器」会提示找不到程序目录。
+> 网络受限时会自动尝试多个镜像，也可以用 `SL_MIRROR=<前缀> npm run fetch:snowluma` 指定。
 
 开发模式（数据目录落在项目内 `data/`，方便调试）：
 
