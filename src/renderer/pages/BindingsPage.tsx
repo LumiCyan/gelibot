@@ -161,7 +161,17 @@ export function BindingsPage({ config, patch }: PageProps) {
           <h2 className="card-title">验证码规则</h2>
           <p className="card-desc">
             验证码一次性有效，同一玩家重新取码时旧码立即作废，避免多个有效码并存。
+            位数、字符集、有效期均可自定义。
           </p>
+
+          <div className="banner info">
+            <strong>两条取码路线：</strong>
+            在「连接设置」里启用 <strong>验证服</strong> 后走新路线——玩家在群里发「绑定
+            &lt;玩家ID&gt;」，机器人把验证码发到他在<strong>验证服</strong>的游戏内对话框，
+            验证通过后自动把玩家加入<strong>主服</strong>白名单。
+            未启用验证服时走旧路线：玩家在服务器内取码，再回群里发「绑定
+            &lt;验证码&gt;」。
+          </div>
 
           <div className="grid-3">
             <div className="field">
@@ -501,7 +511,28 @@ export function BindingsPage({ config, patch }: PageProps) {
         {b.mode === 'code' && (
           <>
             <div className="field">
-              <label>服务器内展示的验证码提示</label>
+              <label>已发码提示（QQ 侧发起绑定后）</label>
+              <input
+                type="text"
+                value={b.messages.codeIssued}
+                onChange={(e) =>
+                  patch({
+                    binding: {
+                      ...b,
+                      messages: { ...b.messages, codeIssued: e.target.value },
+                    },
+                  })
+                }
+              />
+              <p className="hint">
+                占位符：<span className="mono">#player</span>{' '}
+                <span className="mono">#qq</span>{' '}
+                <span className="mono">#time</span>。玩家在群里发「绑定 &lt;玩家ID&gt;」后，
+                机器人用这条文案提示他去游戏内看验证码。
+              </p>
+            </div>
+            <div className="field">
+              <label>游戏内展示的验证码提示</label>
               <input
                 type="text"
                 value={b.messages.serverHint}

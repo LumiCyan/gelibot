@@ -1,7 +1,7 @@
 {
   "name": "gelibot",
   "productName": "GeLi Bot",
-  "version": "1.15.1",
+  "version": "1.16.0",
   "description": "GeLi Bot — QQ (SnowLuma/OneBot v11) 与 Minecraft 服务器 RCON 桥接的 Windows 桌面端",
   "main": "dist/main/main.js",
   "private": true,
@@ -13,7 +13,7 @@
     "start": "npm run build && electron .",
     "dev": "npm run build && electron . --dev",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.renderer.json --noEmit",
-    "test": "npm run build:main && node scripts/tests/test-bind.cjs && node scripts/tests/test-router.cjs && node scripts/tests/test-migrate.cjs && node scripts/tests/test-snowluma.cjs && node scripts/tests/test-onebot-errors.cjs",
+    "test": "npm run build:main && node scripts/tests/test-bind.cjs && node scripts/tests/test-router.cjs && node scripts/tests/test-verify-flow.cjs && node scripts/tests/test-migrate.cjs && node scripts/tests/test-snowluma.cjs && node scripts/tests/test-onebot-errors.cjs",
     "dist": "node scripts/build-release.mjs",
     "dist:dir": "node scripts/build-release.mjs --dir",
     "fetch:snowluma": "node scripts/fetch-snowluma.mjs",

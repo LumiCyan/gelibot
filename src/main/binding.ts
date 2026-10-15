@@ -51,6 +51,8 @@ export class BindingManager {
   private config: BindingConfig;
   private codes: BindCodeManager;
   private serverId: string;
+  /** 是否启用「QQ 发起 → 验证服发码 → 主服加白」的双服流程（影响文案） */
+  private verifyFlow = false;
 
   constructor(
     store: BindingManager['store'],
@@ -64,9 +66,14 @@ export class BindingManager {
     this.serverId = serverId;
   }
 
-  updateConfig(config: BindingConfig, serverId?: string): void {
+  updateConfig(
+    config: BindingConfig,
+    serverId?: string,
+    opts?: { verifyFlow?: boolean },
+  ): void {
     this.config = config;
     if (serverId !== undefined) this.serverId = serverId;
+    if (opts?.verifyFlow !== undefined) this.verifyFlow = opts.verifyFlow;
   }
 
   getConfig(): BindingConfig {
@@ -118,6 +125,55 @@ export class BindingManager {
   }
 
   /**
+   * 写入前的统一闸门校验（所有绑定入口共用）。
+   * 返回 null 表示可以继续写入；返回字符串表示拒绝原因。
+   */
+  private checkCommit(
+    qq: string,
+    playerId: string,
+    opts: { enforceLimit?: boolean } = {},
+  ): string | null {
+    const name = playerId.trim();
+
+    if (this.store.hasBinding(qq, name)) {
+      return `你已经绑定过 ${name} 了`;
+    }
+
+    if (opts.enforceLimit !== false) {
+      const max = this.maxOf();
+      if (this.countOf(qq) >= max) {
+        return `绑定数量已达上限（最多 ${max} 个），请先使用 /解绑 释放名额`;
+      }
+    }
+
+    const taken = this.store.isPlayerTaken(name);
+    if (taken && taken.qq !== qq) {
+      return `玩家 ID ${name} 已被其他 QQ 绑定，如有异议请联系管理员`;
+    }
+
+    return null;
+  }
+
+  /**
+   * 双服流程专用：QQ 侧发起绑定前的预检。
+   *
+   * 会先跑一遍与写入完全相同的闸门（自助开关 / ID 合法性 / 数量上限 / 是否被占用），
+   * 避免出现「验证码已经发到游戏里了，最后一步却绑不上」的糟糕体验。
+   */
+  precheckQqBind(qq: string, playerId: string): { ok: boolean; reason?: string } {
+    const gate = this.checkSelfBindAllowed();
+    if (gate) return { ok: false, reason: gate };
+
+    const invalid = this.validatePlayerId(playerId);
+    if (invalid) return { ok: false, reason: invalid };
+
+    const why = this.checkCommit(qq, playerId);
+    if (why) return { ok: false, reason: why };
+
+    return { ok: true };
+  }
+
+  /**
    * 核心写入：通过全部校验后落库。
    * 所有绑定入口（自助 / 验证码 / 管理员）最终都汇聚到这里，
    * 保证约束只有一处实现，不会因为入口不同而绕过限制。
@@ -130,21 +186,8 @@ export class BindingManager {
     const name = playerId.trim();
     const enforceLimit = opts.enforceLimit !== false;
 
-    if (this.store.hasBinding(qq, name)) {
-      return this.fail(`你已经绑定过 ${name} 了`);
-    }
-
-    if (enforceLimit) {
-      const max = this.maxOf();
-      if (this.countOf(qq) >= max) {
-        return this.fail(`绑定数量已达上限（最多 ${max} 个），请先使用 /解绑 释放名额`);
-      }
-    }
-
-    const taken = this.store.isPlayerTaken(name);
-    if (taken && taken.qq !== qq) {
-      return this.fail(`玩家 ID ${name} 已被其他 QQ 绑定，如有异议请联系管理员`);
-    }
+    const why = this.checkCommit(qq, name, { enforceLimit });
+    if (why) return this.fail(why);
 
     const binding: Binding = {
       qq,
@@ -201,7 +244,7 @@ export class BindingManager {
   /** 服务器内发起绑定，签发验证码 */
   issueCodeFor(
     playerId: string,
-    opts: { groupId?: string } = {},
+    opts: { groupId?: string; qq?: string } = {},
   ): { ok: boolean; record?: BindCodeRecord; error?: string } {
     const invalid = this.validatePlayerId(playerId);
     if (invalid) return { ok: false, error: invalid };
@@ -212,6 +255,7 @@ export class BindingManager {
       ttlSeconds: this.config.codeTtlSeconds,
       playerId: playerId.trim(),
       groupId: opts.groupId,
+      qq: opts.qq,
       serverId: this.serverId || undefined,
     });
     return { ok: true, record };
@@ -230,7 +274,11 @@ export class BindingManager {
     if (!input) return this.fail('请提供验证码');
 
     // 管理员不因验证码失效被卡死：直接按玩家 ID 绑定属于管理员的特权，不走这里。
-    const consumed = this.codes.consume(input, { groupId: opts.fromGroup });
+    // 带上 qq 做归属校验：只允许发起者本人使用该验证码。
+    const consumed = this.codes.consume(input, {
+      groupId: opts.fromGroup,
+      qq,
+    });
     if (!consumed.ok || !consumed.record) {
       return this.fail(consumed.reason ?? '验证码无效或已过期');
     }
@@ -239,7 +287,7 @@ export class BindingManager {
     const result = this.commit(qq, playerId, opts);
     if (!result.ok) {
       // 绑定失败时验证码已被消费，需要重新取码——这里在原因后补一句提示
-      const retry = `${result.reason ?? '绑定失败'}（验证码已作废，请在服务器内重新获取）`;
+      const retry = `${result.reason ?? '绑定失败'}（验证码已作废，请重新获取）`;
       return this.fail(retry);
     }
     return result;
@@ -323,9 +371,13 @@ export class BindingManager {
   formatList(qq: string): string {
     const list = this.listOf(qq);
     if (list.length === 0) {
-      return this.config.mode === 'code'
-        ? '你当前没有任何绑定记录。\n在服务器内执行 /easybot bind 获取验证码后，在群内发送「绑定 <验证码>」即可完成绑定。'
-        : '你当前没有任何绑定记录。\n直接发送「绑定 <玩家ID>」即可完成绑定。';
+      if (this.config.mode !== 'code') {
+        return '你当前没有任何绑定记录。\n直接发送「绑定 <玩家ID>」即可完成绑定。';
+      }
+      const hint = this.verifyFlow
+        ? '发送「绑定 <玩家ID>」，验证码会发到你的游戏内对话框（需先登录验证服）。'
+        : '在服务器内获取验证码后，发送「绑定 <验证码>」即可完成绑定。';
+      return `你当前没有任何绑定记录。\n${hint}`;
     }
     const max = this.maxOf();
     const lines = list.map((b, i) => {

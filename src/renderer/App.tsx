@@ -136,6 +136,20 @@ export function App() {
               {status?.rcon.message ?? '—'}
             </span>
           </div>
+          {config?.verifyServer.enabled && (
+            <div className="status-pill">
+              <span className={`dot ${status?.rconVerify?.state ?? ''}`} />
+              <span className="status-label">验证服</span>
+              <span
+                className="status-value"
+                title={
+                  status?.rconVerify?.lastError || status?.rconVerify?.message || ''
+                }
+              >
+                {status?.rconVerify?.message ?? '—'}
+              </span>
+            </div>
+          )}
           <div className="status-pill">
             <span className={`dot ${status?.onebot.state ?? ''}`} />
             <span className="status-label">QQ</span>

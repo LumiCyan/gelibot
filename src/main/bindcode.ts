@@ -2,7 +2,7 @@ import { randomInt } from 'node:crypto';
 import type { BindCodeRecord, CodeFormat } from '../shared/types';
 
 /** 验证码字符集 */
-const CHARSETS: Record<CodeFormat, string> = {
+export const CODE_CHARSETS: Record<CodeFormat, string> = {
   number: '0123456789',
   // 去掉容易混淆的 I L O
   letter: 'ABCDEFGHJKMNPQRSTUVWXYZ',
@@ -16,6 +16,8 @@ export interface IssueOptions {
   ttlSeconds: number;
   playerId: string;
   groupId?: string;
+  /** 发起绑定的 QQ 号：填了就只允许该 QQ 使用此验证码 */
+  qq?: string;
   serverId?: string;
 }
 
@@ -43,7 +45,7 @@ export class BindCodeManager {
 
   /** 生成一个不重复的验证码 */
   private generate(length: number, format: CodeFormat): string {
-    const charset = CHARSETS[format] ?? CHARSETS.number;
+    const charset = CODE_CHARSETS[format] ?? CODE_CHARSETS.number;
     const len = Math.max(4, Math.min(12, length));
     // 冲突概率极低，但仍做有限次重试，避免碰撞
     for (let attempt = 0; attempt < 50; attempt++) {
@@ -90,6 +92,7 @@ export class BindCodeManager {
       code,
       playerId: opts.playerId,
       groupId: opts.groupId,
+      qq: opts.qq,
       serverId: opts.serverId,
       createdAt: new Date(now).toISOString(),
       expiresAt: new Date(now + ttl).toISOString(),
@@ -102,13 +105,24 @@ export class BindCodeManager {
   /**
    * 消费一个验证码。
    * 无论成功失败都会把该码从池中移除（一次性），只有「不存在/过期」才算未命中。
+   *
+   * `opts.qq` 用于归属校验：由某个 QQ 发起签发的验证码只允许该 QQ 使用，
+   * 校验不通过时**不会**消费掉验证码（它是别人的，不能被误作废）。
    */
-  consume(code: string, opts?: { groupId?: string }): ConsumeResult {
+  consume(code: string, opts?: { groupId?: string; qq?: string }): ConsumeResult {
     this.purge();
     const key = code.trim().toUpperCase();
     const rec = this.codes.get(key);
     if (!rec) {
-      return { ok: false, reason: '验证码无效或已过期，请在服务器内重新获取' };
+      return { ok: false, reason: '验证码无效或已过期，请重新获取' };
+    }
+
+    // 归属校验：防止别人截图/偷看到验证码后抢先绑定
+    if (opts?.qq && rec.qq && rec.qq !== opts.qq) {
+      return {
+        ok: false,
+        reason: '该验证码不是发给你的，请使用自己在游戏内收到的验证码',
+      };
     }
 
     // 一次性：先移除再校验其余条件
@@ -133,6 +147,37 @@ export class BindCodeManager {
     this.purge();
     const code = this.byPlayer.get(playerId);
     return code ? this.codes.get(code) : undefined;
+  }
+
+  /** 查看某个 QQ 手上未使用的验证码（双服流程：QQ 发起绑定的归属查询） */
+  findPendingOfQq(qq: string): BindCodeRecord | undefined {
+    this.purge();
+    for (const rec of this.codes.values()) {
+      if (rec.qq === qq) return rec;
+    }
+    return undefined;
+  }
+
+  /**
+   * 作废某个 QQ 手上所有未使用的验证码，返回作废数量。
+   *
+   * 双服流程里同一个 QQ 只应该有一个「正在等回填」的验证码：
+   * 玩家改用另一个玩家 ID 重新发起时，旧码要一并作废，避免出现
+   * 「手里同时握着两张有效码、不知道该回填哪张」的混乱。
+   */
+  cancelPendingOfQq(qq: string, exceptPlayerId?: string): number {
+    this.purge();
+    let removed = 0;
+    for (const [code, rec] of [...this.codes]) {
+      if (rec.qq !== qq) continue;
+      if (exceptPlayerId && rec.playerId === exceptPlayerId) continue;
+      this.codes.delete(code);
+      if (this.byPlayer.get(rec.playerId) === code) {
+        this.byPlayer.delete(rec.playerId);
+      }
+      removed++;
+    }
+    return removed;
   }
 
   /** 按验证码精确查询 */

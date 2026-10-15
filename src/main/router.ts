@@ -5,7 +5,7 @@ import type {
   RconResult,
 } from '../shared/types';
 import type { BindCodeManager } from './bindcode';
-import { formatDuration } from './bindcode';
+import { CODE_CHARSETS, formatDuration } from './bindcode';
 import type { BindResult, BindingManager } from './binding';
 import { PLAYER_ID_RE, renderTemplate } from './binding';
 import type { MessageEvent } from './onebot';
@@ -30,6 +30,16 @@ const BUILTIN = {
 };
 
 /**
+ * 服务端在「目标玩家不在线」时返回的反馈。
+ *
+ * `tellraw <id>` 在玩家不在线时 RCON 仍然是「执行成功」，只是响应文本里带一句
+ * 报错，所以必须看响应内容才能判断验证码到底有没有送到。
+ * 这里同时容忍英文（控制台默认 en_us）与中文服务端。
+ */
+const PLAYER_NOT_FOUND_RE =
+  /no player was found|no player found|no targets matched|no entity was found|找不到玩家|未找到该玩家|玩家不存在|没有找到玩家/i;
+
+/**
  * 指令路由与权限控制中心。
  *
  * 安全设计原则：
@@ -44,7 +54,10 @@ export class CommandRouter {
   private store: Store;
   private binding: BindingManager;
   private codes: BindCodeManager;
+  /** 主服 RCON：日常指令、白名单管理 */
   private rcon: RconClient;
+  /** 验证服 RCON：只用于把验证码投递到玩家游戏内对话框 */
+  private rconVerify: RconClient;
   private config: AppConfig;
   private lastTrigger = new Map<string, number>();
 
@@ -54,18 +67,25 @@ export class CommandRouter {
     codes: BindCodeManager,
     rcon: RconClient,
     config: AppConfig,
+    /** 验证服 RCON；不传则退化为与主服同一个客户端（单服场景） */
+    rconVerify?: RconClient,
   ) {
     this.store = store;
     this.binding = binding;
     this.codes = codes;
     this.rcon = rcon;
+    this.rconVerify = rconVerify ?? rcon;
     this.config = config;
-    this.binding.updateConfig(config.binding, config.serverId);
+    this.binding.updateConfig(config.binding, config.serverId, {
+      verifyFlow: config.verifyServer.enabled,
+    });
   }
 
   updateConfig(config: AppConfig): void {
     this.config = config;
-    this.binding.updateConfig(config.binding, config.serverId);
+    this.binding.updateConfig(config.binding, config.serverId, {
+      verifyFlow: config.verifyServer.enabled,
+    });
   }
 
   private isAdmin(qq: string): boolean {
@@ -123,7 +143,12 @@ export class CommandRouter {
     lines.push('');
     lines.push('—— 账号绑定 ——');
     if (mode === 'code') {
-      lines.push('/绑定 <验证码>  -  双向验证：先在服务器内取码，再在群内绑定');
+      if (this.config.verifyServer.enabled) {
+        lines.push('/绑定 <玩家ID>  -  获取验证码（发到你的游戏内对话框）');
+        lines.push('/绑定 <验证码>  -  完成绑定，自动加入主服白名单');
+      } else {
+        lines.push('/绑定 <验证码>  -  双向验证：先在服务器内取码，再在群内绑定');
+      }
     } else {
       lines.push('/绑定 <玩家ID>  -  直接绑定你的游戏账号');
     }
@@ -192,15 +217,12 @@ export class CommandRouter {
 
     if (kind === 'bind') {
       if (!args[0]) {
-        return this.config.binding.mode === 'code'
-          ? '用法：/绑定 <验证码>\n请先在服务器内执行 /easybot bind 获取验证码'
-          : '用法：/绑定 <玩家ID>';
+        return this.bindUsage();
       }
-      const res =
-        this.config.binding.mode === 'code'
-          ? this.binding.bindByCode(qq, args[0], { fromGroup, nickname })
-          : this.binding.bindByPlayerId(qq, args[0], { fromGroup, nickname });
-
+      if (this.config.binding.mode === 'code') {
+        return this.handleCodeModeBind(qq, args[0], { fromGroup, nickname }, ev);
+      }
+      const res = this.binding.bindByPlayerId(qq, args[0], { fromGroup, nickname });
       if (res.ok) {
         // 绑定成功后按策略同步群名片
         await this.syncCardAfterBind(ev, qq);
@@ -234,6 +256,194 @@ export class CommandRouter {
     }
 
     return this.buildHelp(this.isAdmin(qq));
+  }
+
+  /** /绑定 无参数时的用法提示 */
+  private bindUsage(): string {
+    if (this.config.binding.mode !== 'code') {
+      return '用法：/绑定 <玩家ID>';
+    }
+    if (this.config.verifyServer.enabled) {
+      return (
+        '用法：/绑定 <玩家ID>  →  获取验证码（验证码会发到你的游戏内对话框）\n' +
+        '　　　/绑定 <验证码>  →  完成绑定'
+      );
+    }
+    return '用法：/绑定 <验证码>\n请先在服务器内获取验证码';
+  }
+
+  /**
+   * 双向验证模式下的 /绑定 入口。
+   *
+   * 参数有两种可能，按下面的顺序判定：
+   * 1. 命中「待验证码池」 → 完成绑定（归属校验在 consume 内做）
+   * 2. 不命中，但该 QQ 手里有未使用的验证码且输入长得像验证码 → 判为输错，明确提示
+   * 3. 其余情况 → 当作玩家 ID，走「验证服发码」流程
+   */
+  private async handleCodeModeBind(
+    qq: string,
+    arg: string,
+    ctx: { fromGroup?: string; nickname?: string },
+    ev: MessageEvent,
+  ): Promise<string> {
+    const input = arg.trim();
+
+    // 1) 完成绑定
+    if (this.codes.find(input)) {
+      const res = this.binding.bindByCode(qq, input, ctx);
+      if (!res.ok) return this.decorate(res, ev);
+
+      await this.syncCardAfterBind(ev, qq);
+      const playerId = res.binding?.playerId ?? '';
+      const note = await this.addToWhitelist(playerId, ev, qq);
+      return `${this.decorate(res, ev)}${note}`;
+    }
+
+    // 2) 手上还有未使用的验证码，又发来一个「格式符合但不存在」的串 → 判定为输错
+    const pending = this.codes.findPendingOfQq(qq);
+    if (pending && this.looksLikeCode(input) && input !== pending.code) {
+      return this.decorate(
+        this.binding.fail('验证码不正确，请核对游戏内对话框里的验证码后重试'),
+        ev,
+      );
+    }
+
+    // 3) 发起绑定（仅在启用验证服时可用）
+    if (!this.config.verifyServer.enabled) {
+      return this.decorate(
+        this.binding.fail('验证码无效或已过期，请重新获取'),
+        ev,
+      );
+    }
+    if (!PLAYER_ID_RE.test(input)) {
+      return this.bindUsage();
+    }
+    return this.startQqSideBind(qq, input, ctx, ev);
+  }
+
+  /** 判断一个串是否「长得像验证码」（位数与字符集均符合配置） */
+  private looksLikeCode(input: string): boolean {
+    const { codeLength, codeFormat } = this.config.binding;
+    if (input.length !== codeLength) return false;
+    const charset = CODE_CHARSETS[codeFormat] ?? CODE_CHARSETS.number;
+    return [...input.toUpperCase()].every((ch) => charset.includes(ch));
+  }
+
+  /**
+   * 双服绑定流程第一步：玩家在 QQ 里发「绑定 <玩家ID>」。
+   *
+   * 1. 预检（自助开关 / ID 合法性 / 数量上限 / 是否已被占用）
+   * 2. 签发验证码，并绑定到发起者 QQ（别人看到也用不了）
+   * 3. 经**验证服** RCON 把验证码投递到玩家游戏内对话框
+   * 4. 回复「请查看验证码」
+   */
+  private async startQqSideBind(
+    qq: string,
+    playerId: string,
+    ctx: { fromGroup?: string; nickname?: string },
+    ev: MessageEvent,
+  ): Promise<string> {
+    const pre = this.binding.precheckQqBind(qq, playerId);
+    if (!pre.ok) {
+      return this.decorate(this.binding.fail(pre.reason ?? '无法发起绑定'), ev);
+    }
+
+    // 同一 QQ 只保留一张有效验证码：换绑另一个 ID 时把旧码一并作废
+    this.codes.cancelPendingOfQq(qq);
+
+    const issued = this.binding.issueCodeFor(playerId, {
+      groupId: ctx.fromGroup,
+      qq,
+    });
+    if (!issued.ok || !issued.record) {
+      return this.decorate(
+        this.binding.fail(issued.error ?? '签发验证码失败'),
+        ev,
+      );
+    }
+    const rec = issued.record;
+    const ttlText = formatDuration(this.codes.remainingSeconds(rec));
+
+    const hint = renderTemplate(this.config.binding.messages.serverHint, {
+      code: rec.code,
+      time: ttlText,
+      player: rec.playerId,
+    });
+    const command = `tellraw ${rec.playerId} ${JSON.stringify({ text: hint })}`;
+    const res = await this.rconVerify.execute(command);
+    this.auditRaw(
+      ev,
+      qq,
+      `[验证服发码] ${rec.playerId}`,
+      command,
+      res,
+    );
+
+    // 玩家不在线时 tellraw 依然「执行成功」，只是响应里带报错 —— 必须看内容
+    const offline = !res.success || PLAYER_NOT_FOUND_RE.test(res.response ?? '');
+    if (offline) {
+      // 发不出去就把码作废，避免池里留一个玩家永远收不到的验证码
+      this.codes.cancel(rec.code);
+      const why = !res.success
+        ? `验证服 RCON 不可用：${res.error ?? '未知错误'}`
+        : `验证服上未找到玩家 ${rec.playerId}，请确认已用该 ID 登录验证服、且 ID 拼写无误`;
+      return this.decorate(this.binding.fail(why), ev);
+    }
+
+    const text = renderTemplate(this.config.binding.messages.codeIssued, {
+      player: rec.playerId,
+      qq,
+      time: ttlText,
+    });
+    return this.decorate({ ok: true, message: text }, ev);
+  }
+
+  /**
+   * 绑定成功后把玩家加入**主服**白名单（原版 whitelist add）。
+   * 返回一段追加在成功提示后面的备注。
+   */
+  private async addToWhitelist(
+    playerId: string,
+    ev: MessageEvent,
+    qq: string,
+  ): Promise<string> {
+    const vs = this.config.verifyServer;
+    if (!vs.enabled || !vs.autoWhitelist || !playerId) return '';
+
+    const command = vs.whitelistAddCommand.replace(/\{player\}/g, playerId).trim();
+    if (!command) return '';
+
+    const res = await this.rcon.execute(command);
+    this.auditRaw(ev, qq, `[主服加白] ${playerId}`, command, res);
+
+    return res.success
+      ? `\n[白名单] 已把 ${playerId} 加入主服白名单`
+      : `\n[白名单] ⚠ 加入白名单失败：${res.error ?? '未知错误'}（可让管理员手动 /加白 ${playerId}）`;
+  }
+
+  /** 落一条审计（非「指令表」路径的 RCON 调用共用） */
+  private auditRaw(
+    ev: MessageEvent | null,
+    qq: string,
+    label: string,
+    command: string,
+    result: RconResult,
+  ): void {
+    this.store.appendAudit({
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      timestamp: new Date().toISOString(),
+      sourceType: ev?.message_type ?? 'private',
+      sourceId: ev
+        ? ev.message_type === 'group'
+          ? String(ev.group_id)
+          : String(ev.user_id)
+        : 'system',
+      userId: qq,
+      rawMessage: label,
+      command,
+      result: result.success ? result.response : `[失败] ${result.error ?? ''}`,
+      success: result.success,
+    });
   }
 
   /** 给回复加上 @ 前缀（按配置） */
@@ -351,7 +561,9 @@ export class CommandRouter {
       if (this.binding.countOf(qq) === 0) {
         const tip =
           this.config.binding.mode === 'code'
-            ? '你还没有绑定游戏账号，请在服务器内执行 /easybot bind 取码后，在群内发送「绑定 <验证码>」'
+            ? this.config.verifyServer.enabled
+              ? '你还没有绑定游戏账号，请先发送「绑定 <玩家ID>」，验证码会发到你的游戏内对话框'
+              : '你还没有绑定游戏账号，请先在服务器内取码，再发送「绑定 <验证码>」'
             : '你还没有绑定游戏账号，请先使用 /绑定 <玩家ID>';
         return { handled: true, reply: tip };
       }
@@ -457,17 +669,13 @@ export class CommandRouter {
       const target = this.pickTarget(rec.playerId);
       const command = `tellraw ${target} ${JSON.stringify({ text: hint })}`;
       const res = await this.rcon.execute(command);
-      this.store.appendAudit({
-        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        timestamp: new Date().toISOString(),
-        sourceType: 'private',
-        sourceId: 'server-bind',
-        userId: rec.playerId,
-        rawMessage: `[服务器内发起绑定] ${rec.playerId}`,
+      this.auditRaw(
+        null,
+        rec.playerId,
+        `[服务器内发起绑定] ${rec.playerId}`,
         command,
-        result: res.success ? res.response : `[失败] ${res.error ?? ''}`,
-        success: res.success,
-      });
+        res,
+      );
     }
 
     return { ok: true, code: rec.code, ttlText };

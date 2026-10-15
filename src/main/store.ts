@@ -56,10 +56,20 @@ export class Store {
     const defaults = createDefaultConfig();
     const saved = this.loadJson<Partial<AppConfig>>(this.configFile, {});
     const savedBinding = (saved.binding ?? {}) as Partial<AppConfig['binding']>;
+    const savedVerify = (saved.verifyServer ?? {}) as Partial<
+      AppConfig['verifyServer']
+    >;
     const merged: AppConfig = {
       ...defaults,
       ...saved,
       rcon: { ...defaults.rcon, ...(saved.rcon ?? {}) },
+      // 验证服是两级嵌套（enabled / autoWhitelist / rcon），必须逐层合并，
+      // 否则老配置升级后会丢掉 rcon 里的 host/port 等字段
+      verifyServer: {
+        ...defaults.verifyServer,
+        ...savedVerify,
+        rcon: { ...defaults.verifyServer.rcon, ...(savedVerify.rcon ?? {}) },
+      },
       onebot: { ...defaults.onebot, ...(saved.onebot ?? {}) },
       whitelist: { ...defaults.whitelist, ...(saved.whitelist ?? {}) },
       // snowluma 也是嵌套对象，同样要展开合并

@@ -25,6 +25,8 @@ import { SnowLumaManager, SNOWLUMA_DATA_SUBDIR } from './snowluma';
 let mainWindow: BrowserWindow | null = null;
 let store: Store;
 let rcon: RconClient;
+/** 验证服 RCON（双服务器绑定流程用；未启用时不连接） */
+let rconVerify: RconClient;
 let onebot: OneBotClient;
 let bindCodes: BindCodeManager;
 let bindingManager: BindingManager;
@@ -119,34 +121,37 @@ function migrateLegacyData(): void {
 function buildStatus(): RuntimeStatus {
   const r = rcon.getState();
   const o = onebot.getState();
-  return {
+  const describe = (state: string): string =>
+    state === 'connected'
+      ? '已连接'
+      : state === 'connecting'
+        ? '连接中…'
+        : state === 'error'
+          ? '连接异常'
+          : '未连接';
+  const status: RuntimeStatus = {
     rcon: {
       state: r.state,
-      message:
-        r.state === 'connected'
-          ? '已连接'
-          : r.state === 'connecting'
-            ? '连接中…'
-            : r.state === 'error'
-              ? '连接异常'
-              : '未连接',
+      message: describe(r.state),
       lastError: r.lastError,
     },
     onebot: {
       state: o.state,
-      message:
-        o.state === 'connected'
-          ? '已连接'
-          : o.state === 'connecting'
-            ? '连接中…'
-            : o.state === 'error'
-              ? '连接异常'
-              : '未连接',
+      message: describe(o.state),
       lastError: o.lastError,
       selfId: o.selfId,
       selfName: o.selfName,
     },
   };
+  if (rconVerify) {
+    const v = rconVerify.getState();
+    status.rconVerify = {
+      state: v.state,
+      message: describe(v.state),
+      lastError: v.lastError,
+    };
+  }
+  return status;
 }
 
 function broadcastStatus(): void {
@@ -187,6 +192,7 @@ async function dispatchReply(ev: MessageEvent, text: string): Promise<void> {
 
 function wireEvents(): void {
   rcon.on('state', () => broadcastStatus());
+  rconVerify?.on('state', () => broadcastStatus());
   onebot.on('state', () => broadcastStatus());
 
   onebot.on('message', (ev: MessageEvent) => {
@@ -250,6 +256,21 @@ function createWindow(): void {
   });
 }
 
+/**
+ * 按配置启停验证服连接。
+ * 未启用时主动断开，免得它在后台反复重连、把「连接异常」一直挂在状态栏上。
+ */
+function applyVerifyServerConfig(next: AppConfig): void {
+  if (!rconVerify) return;
+  rconVerify.updateConfig(next.verifyServer.rcon);
+  if (next.verifyServer.enabled) {
+    const st = rconVerify.getState().state;
+    if (st === 'disconnected' || st === 'error') void rconVerify.connect();
+  } else {
+    void rconVerify.disconnect();
+  }
+}
+
 function registerIpc(): void {
   ipcMain.handle('config:get', () => store.getConfig());
 
@@ -258,6 +279,7 @@ function registerIpc(): void {
       store.saveConfig(next);
       rcon.updateConfig(next.rcon);
       onebot.updateConfig(next.onebot);
+      applyVerifyServerConfig(next);
       router.updateConfig(next);
       snowLuma.updateOptions({
         customDir: next.snowluma.dir,
@@ -273,6 +295,7 @@ function registerIpc(): void {
     const fresh = store.resetConfig();
     rcon.updateConfig(fresh.rcon);
     onebot.updateConfig(fresh.onebot);
+    applyVerifyServerConfig(fresh);
     router.updateConfig(fresh);
     snowLuma.updateOptions({
       customDir: fresh.snowluma.dir,
@@ -304,6 +327,18 @@ function registerIpc(): void {
   });
 
   ipcMain.handle('rcon:test', () => rcon.execute('list'));
+
+  ipcMain.handle('rconVerify:test', () => rconVerify.execute('list'));
+
+  ipcMain.handle('rconVerify:reconnect', async () => {
+    try {
+      await rconVerify.disconnect();
+      await rconVerify.connect();
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: (err as Error).message };
+    }
+  });
 
   ipcMain.handle('rcon:execute', (_e, command: string) =>
     router.executeManual(command),
@@ -406,6 +441,7 @@ app.whenReady().then(async () => {
   const config = store.getConfig();
 
   rcon = new RconClient(config.rcon);
+  rconVerify = new RconClient(config.verifyServer.rcon);
   onebot = new OneBotClient(config.onebot);
   bindCodes = new BindCodeManager();
   bindingManager = new BindingManager(
@@ -414,7 +450,14 @@ app.whenReady().then(async () => {
     bindCodes,
     config.serverId,
   );
-  router = new CommandRouter(store, bindingManager, bindCodes, rcon, config);
+  router = new CommandRouter(
+    store,
+    bindingManager,
+    bindCodes,
+    rcon,
+    config,
+    rconVerify,
+  );
   // 把群名片更新能力注入路由，避免 router 直接依赖 onebot 客户端
   router.setGroupCardProvider(async (groupId, userId, card) => {
     await onebot.setGroupCard(groupId, userId, card);
@@ -443,6 +486,8 @@ app.whenReady().then(async () => {
     mainWindow.webContents.once('did-finish-load', () => {
       void rcon.connect();
       void onebot.connect();
+      // 验证服只在启用时才连，避免默认配置下多打一个必然失败的连接
+      if (store.getConfig().verifyServer.enabled) void rconVerify.connect();
     });
   }
 
@@ -453,6 +498,7 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => {
   rcon?.destroy();
+  rconVerify?.destroy();
   onebot?.destroy();
   if (process.platform !== 'darwin') app.quit();
 });
@@ -465,6 +511,7 @@ app.on('window-all-closed', () => {
 let quitting = false;
 app.on('before-quit', (e) => {
   rcon?.destroy();
+  rconVerify?.destroy();
   onebot?.destroy();
   if (quitting) return;
 

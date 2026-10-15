@@ -51,6 +51,27 @@ export interface RconConfig {
   reconnectIntervalMs: number;
 }
 
+/**
+ * 验证服配置（双服务器模式）。
+ *
+ * 流程：玩家先登录验证服 → 在 QQ 发「绑定 <玩家ID>」→ 本程序把验证码经
+ * **验证服** RCON 投递到该玩家的游戏内对话框 → 玩家在 QQ 回填验证码 →
+ * 验证通过后经 **主服** RCON 执行 whitelist add，把玩家放进真正的服务器。
+ *
+ * 两个 RCON 完全独立：主服 RCON 负责日常指令与加白，验证服 RCON 只负责发码。
+ * 验证服与主服可以在同一台机器上（不同端口），也可以是两台机器。
+ */
+export interface VerifyServerConfig {
+  /** 是否启用双服验证流程（关闭后 /绑定 <玩家ID> 不会触发发码） */
+  enabled: boolean;
+  /** 验证服 RCON：仅用于向玩家对话框投递验证码 */
+  rcon: RconConfig;
+  /** 验证通过后自动把玩家加入主服白名单 */
+  autoWhitelist: boolean;
+  /** 加白命令模板，{player} 会被替换为已通过验证的玩家 ID */
+  whitelistAddCommand: string;
+}
+
 /** OneBot (SnowLuma) 连接配置 */
 export interface OneBotConfig {
   /** WebSocket 地址，例如 ws://127.0.0.1:3001 */
@@ -100,6 +121,8 @@ export interface BindCodeRecord {
   playerId: string;
   /** 发起来源群（用于校验在正确群里完成绑定），可空 */
   groupId?: string;
+  /** 发起绑定的 QQ 号：有此值时只有该 QQ 能使用这个验证码，防止被他人截走 */
+  qq?: string;
   /** 所属服务器标识 */
   serverId?: string;
   /** 创建时间（ISO 字符串） */
@@ -116,6 +139,8 @@ export interface BindMessages {
   bindFail: string;
   /** 已在服务器内发起绑定，提示到群里输入验证码。占位符：#code #time */
   bindStart: string;
+  /** QQ 侧发起绑定、验证码已投递到游戏内时的提示。占位符：#player #time */
+  codeIssued: string;
   /** 服务器内提示语（用于在游戏内展示验证码）。占位符：#code #time */
   serverHint: string;
   /** 解绑成功。占位符：#player */
@@ -247,7 +272,10 @@ export interface AuditEntry {
 
 /** 应用完整配置 */
 export interface AppConfig {
+  /** 主服 RCON：日常指令、白名单管理都走这里 */
   rcon: RconConfig;
+  /** 验证服：双服绑定流程 */
+  verifyServer: VerifyServerConfig;
   onebot: OneBotConfig;
   whitelist: ChatWhitelist;
   binding: BindingConfig;
@@ -260,17 +288,19 @@ export interface AppConfig {
   rateLimitMs: number;
 }
 
+/** 连接状态片段 */
+export interface ConnectionState {
+  state: 'disconnected' | 'connecting' | 'connected' | 'error';
+  message: string;
+  lastError?: string;
+}
+
 /** 运行时连接状态 */
 export interface RuntimeStatus {
-  rcon: {
-    state: 'disconnected' | 'connecting' | 'connected' | 'error';
-    message: string;
-    lastError?: string;
-  };
-  onebot: {
-    state: 'disconnected' | 'connecting' | 'connected' | 'error';
-    message: string;
-    lastError?: string;
+  rcon: ConnectionState;
+  /** 验证服 RCON 状态（未启用双服模式时不下发） */
+  rconVerify?: ConnectionState;
+  onebot: ConnectionState & {
     /** 机器人自身 QQ 号 */
     selfId?: string;
     selfName?: string;
@@ -297,6 +327,11 @@ export interface BridgeApi {
   reconnectRcon(): Promise<{ ok: boolean; error?: string }>;
   reconnectOneBot(): Promise<{ ok: boolean; error?: string }>;
   testRcon(): Promise<RconResult>;
+
+  /** 重连验证服 RCON（双服模式） */
+  reconnectRconVerify(): Promise<{ ok: boolean; error?: string }>;
+  /** 测试验证服 RCON 连通性（执行 list） */
+  testRconVerify(): Promise<RconResult>;
 
   /** 手动执行一条 RCON 命令（仅测试/管理用途） */
   executeRcon(command: string): Promise<RconResult>;

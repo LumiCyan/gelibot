@@ -21,6 +21,9 @@ const api: BridgeApi = {
   reconnectOneBot: () => ipcRenderer.invoke('onebot:reconnect'),
   testRcon: () => ipcRenderer.invoke('rcon:test'),
 
+  reconnectRconVerify: () => ipcRenderer.invoke('rconVerify:reconnect'),
+  testRconVerify: () => ipcRenderer.invoke('rconVerify:test'),
+
   executeRcon: (command: string) => ipcRenderer.invoke('rcon:execute', command),
 
   listBindings: () => ipcRenderer.invoke('binding:list'),

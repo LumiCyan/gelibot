@@ -1,4 +1,10 @@
-import type { AppConfig, BindingConfig, CommandRule, SnowLumaConfig } from './types';
+import type {
+  AppConfig,
+  BindingConfig,
+  CommandRule,
+  SnowLumaConfig,
+  VerifyServerConfig,
+} from './types';
 
 /**
  * 默认 SnowLuma 启动器配置。
@@ -55,12 +61,35 @@ export function createDefaultBindingConfig(): BindingConfig {
       bindFail: '[绑定失败] #why',
       bindStart:
         '[发起绑定] 请在群内发送「绑定 #code」完成绑定，有效期 #time',
+      codeIssued:
+        '[绑定中] 请查看验证码：已发送到你的游戏内对话框，收到后回到这里发送验证码即可完成绑定（有效期 #time）',
       serverHint:
         '[绑定] 你的验证码是 #code，请在 QQ 群内发送「绑定 #code」，有效期 #time',
       unbindSuccess: '[解绑成功] 已解除与玩家 #player 的绑定',
       kickMessage:
         '&c你尚未完成账号绑定或已解绑，请先在 QQ 群内完成绑定后再进入服务器。',
     },
+  };
+}
+
+/**
+ * 默认验证服配置（双服务器模式）。
+ *
+ * 默认关闭：单服用户升级后行为完全不变。启用后，
+ * `/绑定 <玩家ID>` 会改为「验证服发码 → 回填验证码 → 主服加白」。
+ */
+export function createDefaultVerifyServerConfig(): VerifyServerConfig {
+  return {
+    enabled: false,
+    rcon: {
+      host: '127.0.0.1',
+      port: 25576,
+      password: '',
+      timeoutMs: 8000,
+      reconnectIntervalMs: 5000,
+    },
+    autoWhitelist: true,
+    whitelistAddCommand: 'whitelist add {player}',
   };
 }
 
@@ -169,6 +198,7 @@ export function createDefaultConfig(): AppConfig {
       timeoutMs: 8000,
       reconnectIntervalMs: 5000,
     },
+    verifyServer: createDefaultVerifyServerConfig(),
     onebot: {
       wsUrl: 'ws://127.0.0.1:3001',
       accessToken: '',

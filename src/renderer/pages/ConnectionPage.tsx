@@ -11,6 +11,7 @@ export function ConnectionPage({
   onReset,
 }: PageProps & { snowluma: SnowLumaStatus | null; onReset: () => void }) {
   const [testOutput, setTestOutput] = useState('');
+  const [verifyOutput, setVerifyOutput] = useState('');
   const [busy, setBusy] = useState(false);
 
   const testRcon = async () => {
@@ -18,6 +19,18 @@ export function ConnectionPage({
     setTestOutput('正在执行 list …');
     const res = await window.bridge.testRcon();
     setTestOutput(
+      res.success
+        ? `✔ 成功\n${res.response || '（无输出）'}`
+        : `✘ 失败\n${res.error ?? '未知错误'}`,
+    );
+    setBusy(false);
+  };
+
+  const testRconVerify = async () => {
+    setBusy(true);
+    setVerifyOutput('正在执行 list …');
+    const res = await window.bridge.testRconVerify();
+    setVerifyOutput(
       res.success
         ? `✔ 成功\n${res.response || '（无输出）'}`
         : `✘ 失败\n${res.error ?? '未知错误'}`,
@@ -35,8 +48,8 @@ export function ConnectionPage({
 
       <div className="banner warn">
         <strong>安全提醒：</strong>RCON 使用明文 TCP 传输密码，持有密码即等于拥有服务器控制台权限。
-        请务必只在 <span className="mono">127.0.0.1</span> 监听，不要将 25575 端口暴露到公网。
-        跨机部署请通过 SSH 隧道或内网连接。
+        请务必只在 <span className="mono">127.0.0.1</span> 监听，不要将 25575 / 25576
+        端口暴露到公网。跨机部署请通过 SSH 隧道或内网连接。
       </div>
 
       <SnowLumaCard config={config} snowluma={snowluma} patch={patch} />
@@ -125,6 +138,199 @@ export function ConnectionPage({
             <strong>连接失败：</strong>
             {status.rcon.lastError}
           </div>
+        )}
+      </div>
+
+      <div className="card">
+        <h2 className="card-title">验证服（双服务器绑定流程）</h2>
+        <p className="card-desc">
+          启用后，绑定流程改为：玩家先登录<strong>验证服</strong> → 在 QQ
+          发「绑定 &lt;玩家ID&gt;」→ 本程序经验证服 RCON 把验证码发到该玩家的游戏内对话框 →
+          玩家在 QQ 回填验证码 → 验证通过后经<strong>主服</strong> RCON
+          执行 <span className="mono">whitelist add</span>，把玩家放进真正的服务器。
+        </p>
+        <p className="card-desc">
+          两个 RCON 完全独立：上面那个负责日常指令与加白，这一个只负责发验证码。
+          验证服和主服可以在同一台机器上（用不同端口），也可以是两台机器。
+        </p>
+
+        <div className="check-row">
+          <input
+            id="verify-enabled"
+            type="checkbox"
+            checked={config.verifyServer.enabled}
+            onChange={(e) =>
+              patch({
+                verifyServer: { ...config.verifyServer, enabled: e.target.checked },
+              })
+            }
+          />
+          <label htmlFor="verify-enabled">
+            启用双服验证流程（关闭时使用旧的「服务器内取码」路线）
+          </label>
+        </div>
+
+        {config.verifyServer.enabled && (
+          <>
+            <div className="grid-2">
+              <div className="field">
+                <label>主机地址</label>
+                <input
+                  type="text"
+                  value={config.verifyServer.rcon.host}
+                  onChange={(e) =>
+                    patch({
+                      verifyServer: {
+                        ...config.verifyServer,
+                        rcon: { ...config.verifyServer.rcon, host: e.target.value },
+                      },
+                    })
+                  }
+                  placeholder="127.0.0.1"
+                />
+              </div>
+              <div className="field">
+                <label>端口</label>
+                <input
+                  type="number"
+                  value={config.verifyServer.rcon.port}
+                  onChange={(e) =>
+                    patch({
+                      verifyServer: {
+                        ...config.verifyServer,
+                        rcon: {
+                          ...config.verifyServer.rcon,
+                          port: Number(e.target.value) || 25576,
+                        },
+                      },
+                    })
+                  }
+                />
+              </div>
+            </div>
+
+            <div className="field">
+              <label>RCON 密码</label>
+              <input
+                type="password"
+                value={config.verifyServer.rcon.password}
+                onChange={(e) =>
+                  patch({
+                    verifyServer: {
+                      ...config.verifyServer,
+                      rcon: {
+                        ...config.verifyServer.rcon,
+                        password: e.target.value,
+                      },
+                    },
+                  })
+                }
+                placeholder="验证服 server.properties 中的 rcon.password"
+              />
+            </div>
+
+            <div className="grid-2">
+              <div className="field">
+                <label>命令超时（毫秒）</label>
+                <input
+                  type="number"
+                  value={config.verifyServer.rcon.timeoutMs}
+                  onChange={(e) =>
+                    patch({
+                      verifyServer: {
+                        ...config.verifyServer,
+                        rcon: {
+                          ...config.verifyServer.rcon,
+                          timeoutMs: Number(e.target.value) || 8000,
+                        },
+                      },
+                    })
+                  }
+                />
+              </div>
+              <div className="field">
+                <label>断线重连间隔（毫秒，0 = 不重连）</label>
+                <input
+                  type="number"
+                  value={config.verifyServer.rcon.reconnectIntervalMs}
+                  onChange={(e) =>
+                    patch({
+                      verifyServer: {
+                        ...config.verifyServer,
+                        rcon: {
+                          ...config.verifyServer.rcon,
+                          reconnectIntervalMs: Number(e.target.value) || 0,
+                        },
+                      },
+                    })
+                  }
+                />
+              </div>
+            </div>
+
+            <div className="check-row">
+              <input
+                id="verify-auto-whitelist"
+                type="checkbox"
+                checked={config.verifyServer.autoWhitelist}
+                onChange={(e) =>
+                  patch({
+                    verifyServer: {
+                      ...config.verifyServer,
+                      autoWhitelist: e.target.checked,
+                    },
+                  })
+                }
+              />
+              <label htmlFor="verify-auto-whitelist">
+                验证通过后自动把玩家加入主服白名单
+              </label>
+            </div>
+
+            {config.verifyServer.autoWhitelist && (
+              <div className="field">
+                <label>加白命令模板</label>
+                <input
+                  type="text"
+                  className="mono"
+                  value={config.verifyServer.whitelistAddCommand}
+                  onChange={(e) =>
+                    patch({
+                      verifyServer: {
+                        ...config.verifyServer,
+                        whitelistAddCommand: e.target.value,
+                      },
+                    })
+                  }
+                  placeholder="whitelist add {player}"
+                />
+                <p className="hint">
+                  <span className="mono">{'{player}'}</span>{' '}
+                  会被替换成已通过验证的玩家 ID，命令发往<strong>主服</strong> RCON。
+                </p>
+              </div>
+            )}
+
+            <div className="btn-row">
+              <button className="btn" disabled={busy} onClick={testRconVerify}>
+                测试连接（执行 list）
+              </button>
+              <button
+                className="btn"
+                onClick={() => void window.bridge.reconnectRconVerify()}
+              >
+                立即重连
+              </button>
+            </div>
+
+            {verifyOutput && <div className="output">{verifyOutput}</div>}
+            {status?.rconVerify?.lastError && (
+              <div className="banner err">
+                <strong>验证服连接失败：</strong>
+                {status.rconVerify.lastError}
+              </div>
+            )}
+          </>
         )}
       </div>
 
