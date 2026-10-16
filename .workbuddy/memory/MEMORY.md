@@ -17,7 +17,7 @@ Windows 桌面端 Electron 应用：把 QQ（经 SnowLuma / OneBot v11）与 Min
 | `npm run build` | tsc 主进程 + esbuild 渲染进程 + 拷贝资源 |
 | `npm run dist` | **完整打包，走 `scripts/build-release.mjs`（不要直接调 electron-builder）** |
 | `npm run dist:dir` | 只出免压缩目录，快速验证 |
-| `npm test` | 245 项单元测试 |
+| `npm test` | 491 项单元测试 |
 | `npm run icon` | 重新生成图标（`make-icon.py` + `make-ui-assets.py`） |
 | `npm run fetch:snowluma` | 按需拉取内置 SnowLuma 运行包 |
 
@@ -65,9 +65,22 @@ Windows 桌面端 Electron 应用：把 QQ（经 SnowLuma / OneBot v11）与 Min
 
 ## 测试与验证
 
-- 单元测试 245 项（76 绑定 / 40 路由 / 39 配置迁移 / 64 SnowLuma / 26 连接错误翻译）
+- 单元测试 **491 项**（76 绑定 / 53 路由 / 72 双服 / 39 迁移 / 76 数据目录 /
+  85 在线展示 / 64 SnowLuma / 26 连接错误翻译）
 - 真机端到端：SnowLuma 27 项、打包版 21 项（可选）
 - UI 改动可用 `node scripts/ui-screenshot.cjs <输出png> [等待毫秒]` 截图验证
+- 打包版冒烟：`.stage/smoke-packed.cjs`（启动 portable exe → CDP 截图 + 文本核对）
+
+## 发布流程（v1.17.0 已验证）
+
+0. **先验证 GitHub 写权限**：本机 bash 用的 git 无 credential helper、
+   GCM store 常为空 → push 报 `could not read Username`。
+   确认能写之后再开始打包，别等 97MB 打完才发现推不上去。
+1. 版本号（package.json）+ `docs/RELEASE-vX.Y.Z.md` + README 下载区
+2. `npm test` → `npm run typecheck` → `GC_OUT_DIR=dist-release-vX.Y.Z npm run dist`
+3. 图标 7 档校验 → SHA256 回填文档 → 打包版冒烟
+4. 提交 → push main → tag → push tag → REST API 建 Release →
+   curl 传资产（97MB ≈ 5 分钟）→ **下载线上包回验 SHA256**
 
 ## 未实现（用户已推迟）
 
