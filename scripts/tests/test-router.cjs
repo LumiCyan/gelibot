@@ -332,6 +332,75 @@ function privateMsg(qq, text) {
   }
 
   // -------------------------------------------------------------------------
+  section('未知指令：以 / 开头却匹配不上（不能再静默）');
+
+  {
+    const h = makeHarness((c) => { c.binding.mode = 'trust'; });
+    const res = await h.router.handle(groupMsg('20002', '/绑定Steve'));
+    check('漏空格的 /绑定Steve 不再静默', res.handled === true, JSON.stringify(res));
+    check('提示点破「需要一个空格」', /需要一个空格/.test(res.reply), res.reply);
+    check('提示给出正确写法', /\/绑定 Steve/.test(res.reply), res.reply);
+  }
+
+  {
+    const h = makeHarness((c) => { c.binding.mode = 'trust'; });
+    const res = await h.router.handle(groupMsg('20002', '/绑定xx'));
+    check('短 ID 粘连同样给出漏空格提示', /\/绑定 xx/.test(res.reply), res.reply);
+  }
+
+  {
+    const h = makeHarness((c) => { c.binding.mode = 'trust'; });
+    const res = await h.router.handle(groupMsg('20002', '/解绑Steve'));
+    check('解绑粘连给出正确写法', /\/解绑 Steve/.test(res.reply), res.reply);
+  }
+
+  {
+    const h = makeHarness((c) => { c.binding.mode = 'trust'; });
+    const res = await h.router.handle(groupMsg('20002', '/查询绑定abc'));
+    check('长指令名优先切分（查询绑定）', /\/查询绑定 abc/.test(res.reply), res.reply);
+  }
+
+  {
+    const h = makeHarness((c) => { c.binding.mode = 'trust'; });
+    const res = await h.router.handle(groupMsg('20002', '/我的绑定abc'));
+    check(
+      '不吃参数的 /我的绑定 不做漏空格建议',
+      !/需要一个空格/.test(res.reply),
+      res.reply,
+    );
+    check('改为引导查看帮助', /\/帮助/.test(res.reply), res.reply);
+  }
+
+  {
+    const h = makeHarness((c) => { c.binding.mode = 'trust'; });
+    const res = await h.router.handle(groupMsg('20002', '/在线xx'));
+    check(
+      '不吃参数的 /在线 不做漏空格建议',
+      !/需要一个空格/.test(res.reply),
+      res.reply,
+    );
+    check('改为引导查看帮助（在线）', /\/帮助/.test(res.reply), res.reply);
+  }
+
+  {
+    const h = makeHarness((c) => { c.binding.mode = 'trust'; });
+    const res = await h.router.handle(groupMsg('20002', '/帮组'));
+    check('纯错别字指令给出帮助引导', res.handled === true && /\/帮助/.test(res.reply), res.reply);
+  }
+
+  {
+    const h = makeHarness((c) => { c.binding.mode = 'trust'; });
+    const res = await h.router.handle(groupMsg('20002', '/绑定 Steve'));
+    check('正常写法不受影响（有空格仍能绑定）', /绑定成功/.test(res.reply), res.reply);
+  }
+
+  {
+    const h = makeHarness((c) => { c.binding.mode = 'trust'; });
+    const res = await h.router.handle(groupMsg('20002', '/'));
+    check('单个 / 仍返回帮助', /可用指令/.test(res.reply), res.reply);
+  }
+
+  // -------------------------------------------------------------------------
   console.log(`\n${'='.repeat(48)}`);
   console.log(`通过 ${pass} 项，失败 ${fail} 项`);
   console.log('='.repeat(48));

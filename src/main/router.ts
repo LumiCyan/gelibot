@@ -30,6 +30,18 @@ const BUILTIN = {
 };
 
 /**
+ * 会接收参数的内置指令。
+ *
+ * 「指令名和参数漏了空格」的提示只在这几个里找前缀 —— /我的绑定、/帮助
+ * 本身不吃参数，提示成「/我的绑定 abc」会把用户带偏。
+ */
+const ARG_TAKING_BUILTINS: Array<keyof typeof BUILTIN> = [
+  'bind',
+  'unbind',
+  'queryBind',
+];
+
+/**
  * 服务端在「目标玩家不在线」时返回的反馈。
  *
  * `tellraw <id>` 在玩家不在线时 RCON 仍然是「执行成功」，只是响应文本里带一句
@@ -199,7 +211,58 @@ export class CommandRouter {
       return { handled: true, reply: await this.handleBuiltin(builtin, qq, args, ev) };
     }
 
-    return this.handleRconCommand(name, qq, args, ev);
+    const rconResult = await this.handleRconCommand(name, qq, args, ev);
+    if (rconResult.handled) return rconResult;
+
+    // 走到这里说明：消息以「/」开头，却既不匹配内置指令也不匹配自定义指令。
+    // 斜杠已经明确表示「这是一条指令」，静默丢弃会让用户完全摸不着头脑
+    // （最常见的原因是指令名和参数之间漏了空格，比如「/绑定Steve」）。
+    return { handled: true, reply: this.unknownCommandTip(name) };
+  }
+
+  /**
+   * 把「指令名 + 参数」粘连的串切开，例如 /绑定Steve → { 绑定, Steve }。
+   *
+   * 只在**配置为需要参数的指令**里找前缀，避免把 /在线xx 误判成 /在线 xx
+   * （「在线」不接受参数，提示成 /在线 xx 反而是错的）。
+   * 长名优先，保证「我的绑定abc」不会被「绑定」抢先切掉。
+   */
+  private splitKnownCommandPrefix(
+    name: string,
+  ): { keyword: string; rest: string } | null {
+    const lower = name.toLowerCase();
+    const keywords: string[] = [];
+    // 只取**确实接收参数**的内置指令：/我的绑定、/帮助 不吃参数，
+    // 提示成「/我的绑定 abc」反而是错的
+    for (const key of ARG_TAKING_BUILTINS) {
+      keywords.push(...BUILTIN[key]);
+    }
+    for (const rule of this.config.commands) {
+      if (rule.enabled && rule.allowArgs) keywords.push(rule.name);
+    }
+    keywords.sort((a, b) => b.length - a.length);
+
+    for (const kw of keywords) {
+      const k = kw.toLowerCase();
+      if (k === lower || !lower.startsWith(k)) continue;
+      const rest = name.slice(kw.length);
+      // 剩余部分要像个参数（玩家 ID / 验证码 / 中文名），否则不认为是漏空格
+      if (!/^[A-Za-z0-9_\u4e00-\u9fa5-]+$/.test(rest)) continue;
+      return { keyword: kw, rest };
+    }
+    return null;
+  }
+
+  /** 以「/」开头却没人认领时的提示：优先点破「漏了空格」这一最常见原因 */
+  private unknownCommandTip(name: string): string {
+    const split = this.splitKnownCommandPrefix(name);
+    if (split) {
+      return (
+        `未知指令 /${name}\n` +
+        `指令名和参数之间需要一个空格，试试：/${split.keyword} ${split.rest}`
+      );
+    }
+    return `未知指令 /${name}\n发送 /帮助 查看全部可用指令`;
   }
 
   /** 处理内置的绑定类指令 */
