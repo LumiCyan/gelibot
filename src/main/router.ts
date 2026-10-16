@@ -20,6 +20,16 @@ interface HandleResult {
   reply?: string;
 }
 
+/**
+ * 在线展示提供者：把「查在线人数」渲染成一条可直接发送的消息。
+ *
+ * 实现在 main 侧组装（采集 + 头像 + 图片渲染），router 只依赖这个窄接口。
+ * 返回 null 表示这里给不出结果，路由应回退到原生 RCON 流程。
+ */
+export interface OnlineCardProvider {
+  build(): Promise<string | null>;
+}
+
 /** 内置的绑定管理指令名（不投递 RCON，由本层直接处理） */
 const BUILTIN = {
   bind: ['绑定', 'bind'],
@@ -72,6 +82,13 @@ export class CommandRouter {
   private rconVerify: RconClient;
   private config: AppConfig;
   private lastTrigger = new Map<string, number>();
+  /** 在线展示提供者（未注入时 /在线 走原生 RCON 流程） */
+  private onlineCard: OnlineCardProvider | null = null;
+
+  /** 注入在线展示提供者（图片卡片）；传 null 关闭 */
+  setOnlineCardProvider(p: OnlineCardProvider | null): void {
+    this.onlineCard = p;
+  }
 
   constructor(
     store: Store,
@@ -629,6 +646,26 @@ export class CommandRouter {
               : '你还没有绑定游戏账号，请先在服务器内取码，再发送「绑定 <验证码>」'
             : '你还没有绑定游戏账号，请先使用 /绑定 <玩家ID>';
         return { handled: true, reply: tip };
+      }
+    }
+
+    // 在线查询：启用在线展示后改为图片卡片（或文字模板）。
+    // 提供者返回 null 表示「这里给不出结果」（RCON 不可用等），
+    // 此时不打断流程，继续走下面的原生 RCON 路径，用户会看到原生提示。
+    if (
+      this.onlineCard &&
+      this.config.presence.enabled &&
+      rule.template.trim().toLowerCase() === 'list'
+    ) {
+      const msg = await this.onlineCard.build();
+      if (msg) {
+        this.auditRaw(ev, qq, ev.raw_message, 'list · 在线展示', {
+          success: true,
+          response: msg.startsWith('[CQ:image')
+            ? '已发送在线人数图片卡片'
+            : msg,
+        });
+        return { handled: true, reply: msg };
       }
     }
 

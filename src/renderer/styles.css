@@ -382,6 +382,16 @@ button.btn.primary.saved:disabled {
   cursor: pointer;
 }
 
+/* 在线卡片预览图 */
+.card-preview {
+  display: block;
+  max-width: 100%;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background:
+    repeating-conic-gradient(#f1f5f9 0% 25%, #ffffff 0% 50%) 50% / 16px 16px;
+}
+
 /* ---------- 表格 ---------- */
 table {
   width: 100%;

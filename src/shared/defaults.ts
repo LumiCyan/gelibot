@@ -2,6 +2,7 @@ import type {
   AppConfig,
   BindingConfig,
   CommandRule,
+  PresenceConfig,
   SnowLumaConfig,
   VerifyServerConfig,
 } from './types';
@@ -90,6 +91,22 @@ export function createDefaultVerifyServerConfig(): VerifyServerConfig {
     },
     autoWhitelist: true,
     whitelistAddCommand: 'whitelist add {player}',
+  };
+}
+
+/**
+ * 默认在线展示配置。
+ *
+ * 默认关闭：升级后 `/在线` 行为与旧版完全一致（文字转发 RCON 输出）。
+ * 启用后改为发送图片卡片（服务器名 + 在线人数 + 玩家头像）。
+ */
+export function createDefaultPresenceConfig(): PresenceConfig {
+  return {
+    enabled: false,
+    serverName: '生存服',
+    showAvatars: true,
+    sendImage: true,
+    textTemplate: '[{server}] 在线 {online}/{max}\n{players}',
   };
 }
 
@@ -213,6 +230,7 @@ export function createDefaultConfig(): AppConfig {
       admins: [],
     },
     binding: createDefaultBindingConfig(),
+    presence: createDefaultPresenceConfig(),
     snowluma: createDefaultSnowLumaConfig(),
     commands: defaultCommands(),
     serverId: 'main',

@@ -69,6 +69,10 @@ const api: BridgeApi = {
   importData: () => ipcRenderer.invoke('data:import'),
   moveDataToPortable: () => ipcRenderer.invoke('data:moveToPortable'),
   openDataDir: () => ipcRenderer.invoke('data:openDir'),
+
+  // ---------- 在线展示 ----------
+
+  previewPresence: (presence) => ipcRenderer.invoke('presence:preview', presence),
 };
 
 contextBridge.exposeInMainWorld('bridge', api);

@@ -1,5 +1,11 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import type { DataDirInfo, DataTransferResult, SnowLumaStatus } from '../../shared/types';
+import type {
+  AppConfig,
+  DataDirInfo,
+  DataTransferResult,
+  PresencePreview,
+  SnowLumaStatus,
+} from '../../shared/types';
 import type { PageProps } from '../App';
 import { SnowLumaCard } from './SnowLumaCard';
 
@@ -38,6 +44,26 @@ export function ConnectionPage({
   const [dataOutput, setDataOutput] = useState('');
   const [dataBusy, setDataBusy] = useState(false);
   const [withSecrets, setWithSecrets] = useState(false);
+
+  // ---------- 在线展示 ----------
+  const [preview, setPreview] = useState<PresencePreview | null>(null);
+  const [previewBusy, setPreviewBusy] = useState(false);
+
+  const patchPresence = (p: Partial<AppConfig['presence']>) =>
+    patch({ presence: { ...config.presence, ...p } });
+
+  const runPreview = async () => {
+    setPreviewBusy(true);
+    setPreview(null);
+    try {
+      // 传当前界面上的草稿配置：改了没保存也能预览到真实效果
+      setPreview(await window.bridge.previewPresence(config.presence));
+    } catch (err) {
+      setPreview({ ok: false, demo: false, error: (err as Error).message });
+    } finally {
+      setPreviewBusy(false);
+    }
+  };
 
   const refreshDataInfo = useCallback(() => {
     void window.bridge.getDataDirInfo().then(setDataInfo);
@@ -613,6 +639,93 @@ export function ConnectionPage({
             )}
 
             {dataOutput && <div className="output">{dataOutput}</div>}
+          </>
+        )}
+      </div>
+
+      {/* ---------- 在线展示 ---------- */}
+      <div className="card">
+        <h2 className="card-title">在线展示（/在线 图片卡片）</h2>
+        <p className="hint">
+          启用后，群里的 <span className="mono">/在线</span> 会改发一张图片卡片：
+          服务器名、在线人数、玩家头像（取绑定 QQ 的头像，未绑定的显示首字母）。
+          数据来自主服 RCON 的 <span className="mono">list</span>，不需要服务端插件。
+        </p>
+
+        <label className="data-check" style={{ marginTop: 6 }}>
+          <input
+            type="checkbox"
+            checked={config.presence.enabled}
+            onChange={(e) => patchPresence({ enabled: e.target.checked })}
+          />
+          启用在线展示（关闭后 /在线 与旧版行为完全一致）
+        </label>
+
+        {config.presence.enabled && (
+          <>
+            <div className="field" style={{ maxWidth: 320 }}>
+              <label>服务器名（显示在卡片标题）</label>
+              <input
+                value={config.presence.serverName}
+                onChange={(e) => patchPresence({ serverName: e.target.value })}
+                placeholder="生存服"
+              />
+            </div>
+
+            <label className="data-check">
+              <input
+                type="checkbox"
+                checked={config.presence.sendImage}
+                onChange={(e) => patchPresence({ sendImage: e.target.checked })}
+              />
+              发送图片卡片（关闭则只发文字模板）
+            </label>
+
+            <label className="data-check">
+              <input
+                type="checkbox"
+                checked={config.presence.showAvatars}
+                onChange={(e) => patchPresence({ showAvatars: e.target.checked })}
+              />
+              卡片里显示玩家头像（绑定过的 QQ 头像，取不到时显示首字母）
+            </label>
+
+            <div className="field">
+              <label>文字模板（发送图片被关闭或渲染失败时的回复）</label>
+              <textarea
+                rows={3}
+                value={config.presence.textTemplate}
+                onChange={(e) => patchPresence({ textTemplate: e.target.value })}
+              />
+            </div>
+            <p className="hint">
+              可用变量：
+              <span className="mono">
+                {' '}
+                {'{server}'} {'{online}'} {'{max}'} {'{players}'}
+              </span>
+            </p>
+
+            <div className="btn-row">
+              <button className="btn" disabled={previewBusy} onClick={() => void runPreview()}>
+                {previewBusy ? '渲染中…' : '预览卡片'}
+              </button>
+            </div>
+            <p className="hint">
+              预览优先使用真实数据（会当场查一次 RCON）；查不到时用演示数据渲染，
+              方便先调样式。发送到群里的图片与此预览完全一致。
+            </p>
+
+            {preview && (
+              <div style={{ marginTop: 12 }}>
+                {preview.summary && <p className="hint">{preview.summary}</p>}
+                {preview.ok && preview.dataUrl ? (
+                  <img className="card-preview" src={preview.dataUrl} alt="在线人数卡片预览" />
+                ) : (
+                  <div className="output">✘ 预览失败：{preview.error ?? '未知错误'}</div>
+                )}
+              </div>
+            )}
           </>
         )}
       </div>

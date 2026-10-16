@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, net, shell } from 'electron';
 import type { OpenDialogOptions, SaveDialogOptions } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -10,6 +10,7 @@ import type {
   DataDirInfo,
   DataFileInfo,
   DataTransferResult,
+  PresencePreview,
   RuntimeStatus,
   SnowLumaStatus,
 } from '../shared/types';
@@ -24,6 +25,10 @@ import {
 import { BindCodeManager } from './bindcode';
 import { BindingManager } from './binding';
 import { CommandRouter } from './router';
+import { PresenceService } from './presence';
+import { AvatarCache, type FetchLike } from './avatar';
+import { CardRenderer } from './card';
+import { OnlineCardService } from './online-card';
 import { SnowLumaManager, SNOWLUMA_DATA_SUBDIR } from './snowluma';
 import {
   DATA_SUBDIR,
@@ -56,6 +61,26 @@ let bindCodes: BindCodeManager;
 let bindingManager: BindingManager;
 let router: CommandRouter;
 let snowLuma: SnowLumaManager;
+/** 在线人数采集（主服 RCON list） */
+let presence: PresenceService;
+/** 图片卡片渲染器（隐藏窗口截图） */
+let cardRenderer: CardRenderer;
+/** 在线展示编排（采集 + 头像 + 渲染 + 落盘） */
+let onlineCard: OnlineCardService;
+
+/** 图标读取失败时的 1×1 透明占位，保证卡片头部不出现破图 */
+const TINY_PNG =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+
+/** 读正式图标（渲染层资源，与窗口图标同一份）并转成 data URI */
+function loadCardIconUri(): string {
+  try {
+    const p = path.join(__dirname, '../renderer/assets/window-256.png');
+    return 'data:image/png;base64,' + fs.readFileSync(p).toString('base64');
+  } catch {
+    return TINY_PNG;
+  }
+}
 
 function isDevMode(): boolean {
   return process.argv.includes('--dev');
@@ -505,6 +530,38 @@ function registerDataIpc(): void {
   });
 }
 
+/** 在线展示（图片卡片）相关 IPC */
+function registerPresenceIpc(): void {
+  ipcMain.handle(
+    'presence:preview',
+    async (_e, draft?: Partial<AppConfig['presence']>): Promise<PresencePreview> => {
+      const cfg = store.getConfig();
+      // 草稿优先：界面改了没保存也能预览到真实效果
+      const presenceCfg = { ...cfg.presence, ...(draft ?? {}) };
+      try {
+        const snap = await presence.refresh();
+        const demo = !snap.ok;
+        const data = demo
+          ? OnlineCardService.demoData(presenceCfg.serverName)
+          : await onlineCard.buildData(snap, presenceCfg);
+        const { png, width, height } = await cardRenderer.render(data);
+        return {
+          ok: true,
+          dataUrl: 'data:image/png;base64,' + png.toString('base64'),
+          demo,
+          width,
+          height,
+          summary: demo
+            ? `真实查询不可用（${snap.error ?? '未知原因'}），下面是用演示数据渲染的效果`
+            : `当前在线 ${snap.online}/${snap.max}，名单 ${snap.players.length} 人`,
+        };
+      } catch (err) {
+        return { ok: false, demo: false, error: (err as Error).message };
+      }
+    },
+  );
+}
+
 function registerIpc(): void {
   ipcMain.handle('config:get', () => store.getConfig());
 
@@ -684,6 +741,26 @@ app.whenReady().then(async () => {
     await onebot.setGroupCard(groupId, userId, card);
   });
 
+  // 在线展示：/在线 的图片卡片（采集 + 头像 + 隐藏窗口渲染）
+  presence = new PresenceService(rcon);
+  const avatarCache = new AvatarCache({
+    dir: path.join(getDataDir(), 'avatars'),
+    // net.fetch 走 Chromium 网络栈 —— Node 的 TLS 会被证书吊销检查卡住
+    fetchImpl: (url, init) => net.fetch(url, init),
+    log: (m) => console.warn('[avatar]', m),
+  });
+  cardRenderer = new CardRenderer({ iconUri: loadCardIconUri() });
+  onlineCard = new OnlineCardService({
+    presence,
+    avatars: avatarCache,
+    renderer: cardRenderer,
+    getConfig: () => store.getConfig(),
+    findBinding: (playerId) => bindingManager.findByPlayer(playerId),
+    cardDir: path.join(getDataDir(), 'cards'),
+    log: (m) => console.warn('[online-card]', m),
+  });
+  router.setOnlineCardProvider(onlineCard);
+
   snowLuma = new SnowLumaManager({
     customDir: config.snowluma.dir,
     bundledDir: getBundledSnowLumaDir(),
@@ -701,6 +778,7 @@ app.whenReady().then(async () => {
   wireEvents();
   registerIpc();
   registerDataIpc();
+  registerPresenceIpc();
   createWindow();
 
   // 等渲染进程就绪后再发起连接，避免状态推送早于页面加载
@@ -722,6 +800,7 @@ app.on('window-all-closed', () => {
   rcon?.destroy();
   rconVerify?.destroy();
   onebot?.destroy();
+  cardRenderer?.destroy();
   if (process.platform !== 'darwin') app.quit();
 });
 
@@ -735,6 +814,7 @@ app.on('before-quit', (e) => {
   rcon?.destroy();
   rconVerify?.destroy();
   onebot?.destroy();
+  cardRenderer?.destroy();
   if (quitting) return;
 
   const shouldStop = (() => {

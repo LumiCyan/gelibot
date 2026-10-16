@@ -72,6 +72,30 @@ export interface VerifyServerConfig {
   whitelistAddCommand: string;
 }
 
+/**
+ * 在线展示（/在线 指令的图片卡片）配置。
+ *
+ * 数据来自主服 RCON 的 `list`；渲染成本机进程内的隐藏窗口截图，
+ * 不依赖任何第三方渲染库，也不依赖服务端插件。
+ */
+export interface PresenceConfig {
+  /** 总开关：关闭后 /在线 保持原样（文字转发 RCON 输出） */
+  enabled: boolean;
+  /** 卡片上展示的服务器名，例如「生存服」 */
+  serverName: string;
+  /** 卡片里显示玩家头像（取绑定 QQ 的头像，未绑定则用首字母色块） */
+  showAvatars: boolean;
+  /** /在线 发送图片卡片；关闭则只发文字模板 */
+  sendImage: boolean;
+  /**
+   * 文字模板，出现在两种场合：
+   *  1) sendImage 关闭时，作为 /在线 的回复
+   *  2) 图片渲染失败时的降级回复
+   * 变量：{server} {online} {max} {players}
+   */
+  textTemplate: string;
+}
+
 /** OneBot (SnowLuma) 连接配置 */
 export interface OneBotConfig {
   /** WebSocket 地址，例如 ws://127.0.0.1:3001 */
@@ -279,6 +303,8 @@ export interface AppConfig {
   onebot: OneBotConfig;
   whitelist: ChatWhitelist;
   binding: BindingConfig;
+  /** 在线展示（/在线 图片卡片） */
+  presence: PresenceConfig;
   /** SnowLuma 启动器 */
   snowluma: SnowLumaConfig;
   commands: CommandRule[];
@@ -436,4 +462,28 @@ export interface BridgeApi {
   moveDataToPortable(): Promise<DataTransferResult>;
   /** 在系统文件管理器里打开数据目录 */
   openDataDir(): Promise<{ ok: boolean; error?: string }>;
+
+  // ---------- 在线展示（图片卡片） ----------
+
+  /**
+   * 渲染一张在线人数卡片预览。
+   * 传入界面上的草稿配置（未保存也能预览，所见即所得）；
+   * 省略时用当前已保存的配置。真实查询失败时回退演示数据。
+   */
+  previewPresence(presence?: PresenceConfig): Promise<PresencePreview>;
+}
+
+/** 在线卡片预览结果 */
+export interface PresencePreview {
+  ok: boolean;
+  /** PNG 的 data URL（可直接塞进 <img src>） */
+  dataUrl?: string;
+  /** 是否使用了演示数据（真实查询失败时） */
+  demo: boolean;
+  /** 输出尺寸（物理像素） */
+  width?: number;
+  height?: number;
+  /** 真实数据下的摘要文本，例如「在线 3/20，共 3 人」 */
+  summary?: string;
+  error?: string;
 }

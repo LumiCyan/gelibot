@@ -29,6 +29,8 @@ export function mergeConfigWithDefaults(saved: Partial<AppConfig>): AppConfig {
     },
     onebot: { ...defaults.onebot, ...(saved.onebot ?? {}) },
     whitelist: { ...defaults.whitelist, ...(saved.whitelist ?? {}) },
+    // presence 单层嵌套；显式展开以便未来加字段时老配置继续自动补齐
+    presence: { ...defaults.presence, ...(saved.presence ?? {}) },
     // snowluma 也是嵌套对象，同样要展开合并
     snowluma: { ...defaults.snowluma, ...(saved.snowluma ?? {}) },
     // binding 存在两级嵌套，必须逐层合并，否则老配置升级后会丢掉新增的模板字段
