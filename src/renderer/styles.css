@@ -353,6 +353,35 @@ button.btn.primary.saved:disabled {
   margin-top: 14px;
 }
 
+/* ---------- 数据与备份卡片 ---------- */
+
+/* 路径输入框 + 「打开目录」按钮同排 */
+.data-path-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.data-path-row input {
+  flex: 1;
+  font-size: 12px;
+}
+
+/* 导出按钮旁边的复选框标签，跟按钮基线对齐 */
+.data-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.data-check input {
+  margin: 0;
+  cursor: pointer;
+}
+
 /* ---------- 表格 ---------- */
 table {
   width: 100%;

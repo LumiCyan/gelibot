@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
+import type { OpenDialogOptions, SaveDialogOptions } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import type {
@@ -6,10 +7,13 @@ import type {
   AuditEntry,
   BindCodeRecord,
   Binding,
+  DataDirInfo,
+  DataFileInfo,
+  DataTransferResult,
   RuntimeStatus,
   SnowLumaStatus,
 } from '../shared/types';
-import { Store } from './store';
+import { Store, mergeConfigWithDefaults } from './store';
 import { RconClient } from './rcon';
 import {
   OneBotClient,
@@ -21,9 +25,29 @@ import { BindCodeManager } from './bindcode';
 import { BindingManager } from './binding';
 import { CommandRouter } from './router';
 import { SnowLumaManager, SNOWLUMA_DATA_SUBDIR } from './snowluma';
+import {
+  DATA_SUBDIR,
+  pickPortableDir,
+  planMoveToPortable,
+  moveDataToPortable,
+  resolveDataDir,
+  sidecarDataDir,
+  type DataDirDecision,
+} from './datadir';
+import {
+  buildExportBundle,
+  mergeBindings,
+  mergeImportedConfig,
+  parseImportBundle,
+  suggestExportName,
+} from './transfer';
 
 let mainWindow: BrowserWindow | null = null;
 let store: Store;
+/** 本次运行采用的数据目录决策（启动时算一次，之后不再变） */
+let dataDirDecision: DataDirDecision;
+/** 便携版里「用户放 exe 的文件夹」，用于「把配置存到程序目录」；不可用时为 null */
+let portableDir: string | null = null;
 let rcon: RconClient;
 /** 验证服 RCON（双服务器绑定流程用；未启用时不连接） */
 let rconVerify: RconClient;
@@ -37,10 +61,46 @@ function isDevMode(): boolean {
   return process.argv.includes('--dev');
 }
 
+/**
+ * 本次运行采用哪个数据目录（只算一次，之后不再变）。
+ *
+ * 规则：
+ * 1. 开发模式（`--dev`）→ 项目内的 data/
+ * 2. 程序目录下存在 `data/config.json` → 用它（绿色版模式，配置跟随程序）
+ * 3. 否则 → `%APPDATA%/GeLi Bot/data`
+ *
+ * 第 2 条是为了根治「换版本要重新配置」：把 data 文件夹和 exe 放在一起，
+ * 换任何版本、任何电脑，配置都是同一份。第 3 条是兜底，保持老用户无感。
+ */
+function ensureDataDirDecision(): DataDirDecision {
+  if (dataDirDecision) return dataDirDecision;
+
+  if (isDevMode()) {
+    dataDirDecision = {
+      dir: path.join(process.cwd(), DATA_SUBDIR),
+      source: 'user',
+      reason: '开发模式（--dev）：使用项目内的 data 目录',
+    };
+    return dataDirDecision;
+  }
+
+  portableDir = pickPortableDir({
+    portableEnv: process.env.PORTABLE_EXECUTABLE_DIR,
+    exePath: app.getPath('exe'),
+    isPackaged: app.isPackaged,
+  });
+  dataDirDecision = resolveDataDir({
+    portableDir,
+    userDataDir: app.getPath('userData'),
+  });
+
+  console.log(`[data] 数据目录：${dataDirDecision.dir}（${dataDirDecision.reason}）`);
+  if (dataDirDecision.warning) console.warn(`[data] ${dataDirDecision.warning}`);
+  return dataDirDecision;
+}
+
 function getDataDir(): string {
-  // 开发模式下用项目内 data/，打包后使用用户数据目录
-  if (isDevMode()) return path.join(process.cwd(), 'data');
-  return path.join(app.getPath('userData'), 'data');
+  return ensureDataDirDecision().dir;
 }
 
 /**
@@ -271,20 +331,186 @@ function applyVerifyServerConfig(next: AppConfig): void {
   }
 }
 
+/**
+ * 把一份新配置落盘并让所有运行中的组件切过去。
+ * config:save / config:reset / data:import 三处共用，避免任何一条路径漏掉某个组件。
+ */
+function applyConfig(next: AppConfig): void {
+  store.saveConfig(next);
+  rcon.updateConfig(next.rcon);
+  onebot.updateConfig(next.onebot);
+  applyVerifyServerConfig(next);
+  router.updateConfig(next);
+  snowLuma?.updateOptions({
+    customDir: next.snowluma.dir,
+    fallbackWebUrl: next.snowluma.webUrl,
+  });
+}
+
+/** 收集当前数据目录的信息，供界面展示 */
+function buildDataDirInfo(): DataDirInfo {
+  const decision = ensureDataDirDecision();
+  let files: DataFileInfo[] = [];
+  try {
+    files = fs
+      .readdirSync(decision.dir)
+      .filter((f) => !f.endsWith('.tmp'))
+      .map((name) => {
+        const st = fs.statSync(path.join(decision.dir, name));
+        return { name, size: st.size, mtime: st.mtime.toISOString() };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+  } catch {
+    files = [];
+  }
+
+  const existing = sidecarDataDir(portableDir);
+  const decisionPortable =
+    decision.source === 'portable' ? decision.dir : null;
+  const plan = planMoveToPortable({ portableDir, currentDir: decision.dir });
+
+  return {
+    dir: decision.dir,
+    source: decision.source,
+    reason: decision.reason,
+    warning: decision.warning,
+    portableDir,
+    canMoveToPortable: plan.ok,
+    existingPortableDataDir: decisionPortable ?? existing,
+    files,
+  };
+}
+
+/**
+ * 对话框统一挂到主窗口上（有窗口时），否则在部分环境下会弹到屏幕角落。
+ */
+function showSave(opts: SaveDialogOptions): ReturnType<typeof dialog.showSaveDialog> {
+  return mainWindow ? dialog.showSaveDialog(mainWindow, opts) : dialog.showSaveDialog(opts);
+}
+
+function showOpen(opts: OpenDialogOptions): ReturnType<typeof dialog.showOpenDialog> {
+  return mainWindow ? dialog.showOpenDialog(mainWindow, opts) : dialog.showOpenDialog(opts);
+}
+
+/** 数据目录与备份相关的 IPC */
+function registerDataIpc(): void {
+  ipcMain.handle('data:info', (): DataDirInfo => buildDataDirInfo());
+
+  ipcMain.handle('data:openDir', async () => {
+    const dir = getDataDir();
+    const err = await shell.openPath(dir);
+    return err ? { ok: false, error: err } : { ok: true };
+  });
+
+  ipcMain.handle('data:export', async (_e, includeSecrets: boolean) => {
+    try {
+      const suggested = suggestExportName();
+      const res = await showSave({
+        title: '导出 GeLi Bot 配置',
+        defaultPath: suggested,
+        filters: [{ name: 'GeLi Bot 配置', extensions: ['json'] }],
+      });
+      if (res.canceled || !res.filePath) return { ok: false, error: '已取消' };
+
+      const bundle = buildExportBundle(store.getConfig(), store.listBindings(), {
+        includeSecrets: includeSecrets === true,
+        productVersion: app.getVersion(),
+      });
+      const text = JSON.stringify(bundle, null, 2);
+      fs.writeFileSync(res.filePath, text, 'utf8');
+
+      const lines = [
+        `已写入 ${res.filePath}`,
+        `包含 1 份配置 + ${bundle.bindings.length} 条绑定关系`,
+        bundle.secretsIncluded
+          ? '⚠ 文件包含 RCON 密码 / OneBot AccessToken，请妥善保管'
+          : '已剔除密码等敏感字段（导入后需要重新填写密码）',
+      ];
+      return { ok: true, path: res.filePath, bytes: Buffer.byteLength(text), lines };
+    } catch (err) {
+      return { ok: false, error: (err as Error).message };
+    }
+  });
+
+  ipcMain.handle('data:import', async () => {
+    try {
+      const res = await showOpen({
+        title: '导入 GeLi Bot 配置（导出包或 data/config.json 均可）',
+        properties: ['openFile'],
+        filters: [{ name: 'GeLi Bot 配置', extensions: ['json'] }],
+      });
+      if (res.canceled || res.filePaths.length === 0) {
+        return { ok: false, error: '已取消' };
+      }
+      const file = res.filePaths[0];
+      const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+
+      const parsed = parseImportBundle(raw);
+      if (!parsed.ok) return { ok: false, error: parsed.error };
+      const bundle = parsed.value;
+
+      const current = store.getConfig();
+      // 走与「读取老配置」同一条合并链，缺字段自动补默认值
+      const merged = mergeConfigWithDefaults(bundle.config);
+      const next = mergeImportedConfig(merged, current, bundle.secretsIncluded);
+      applyConfig(next);
+
+      const before = store.listBindings();
+      const merged2 = mergeBindings(before, bundle.bindings);
+      if (merged2.added > 0) store.setBindings(merged2.list);
+
+      const lines = [
+        `已导入 ${file}`,
+        bundle.shape === 'raw-config'
+          ? '识别为原始 config.json（不含绑定关系）'
+          : `来源：GeLi Bot ${bundle.productVersion}${bundle.exportedAt ? ` · ${bundle.exportedAt.slice(0, 10)}` : ''}`,
+      ];
+      if (bundle.shape === 'bundle') {
+        lines.push(`绑定关系：新增 ${merged2.added} 条，跳过 ${merged2.skipped} 条（已存在）`);
+      }
+      if (bundle.droppedBindings > 0) {
+        lines.push(`⚠ 有 ${bundle.droppedBindings} 条绑定记录字段残缺，已丢弃`);
+      }
+      if (!bundle.secretsIncluded) {
+        lines.push('文件未包含密码，本机原有的 RCON 密码与 AccessToken 已保留');
+      }
+      lines.push('配置已生效，无需重启');
+
+      return { ok: true, path: file, lines, configChanged: true };
+    } catch (err) {
+      return { ok: false, error: (err as Error).message };
+    }
+  });
+
+  ipcMain.handle('data:moveToPortable', () => {
+    try {
+      const current = getDataDir();
+      const plan = planMoveToPortable({ portableDir, currentDir: current });
+      if (!plan.ok) return { ok: false, error: plan.error };
+
+      moveDataToPortable(current, plan.target);
+      const count = fs.readdirSync(plan.target).length;
+      return {
+        ok: true,
+        path: plan.target,
+        lines: [
+          `已把 ${count} 个文件复制到 ${plan.target}`,
+          '请手动重启 GeLi Bot，重启后配置就会跟随程序目录',
+          '之后换版本只需把 exe 和 data 文件夹放在一起',
+        ],
+      };
+    } catch (err) {
+      return { ok: false, error: (err as Error).message };
+    }
+  });
+}
+
 function registerIpc(): void {
   ipcMain.handle('config:get', () => store.getConfig());
 
   ipcMain.handle('config:save', (_e, next: AppConfig) => {
     try {
-      store.saveConfig(next);
-      rcon.updateConfig(next.rcon);
-      onebot.updateConfig(next.onebot);
-      applyVerifyServerConfig(next);
-      router.updateConfig(next);
-      snowLuma.updateOptions({
-        customDir: next.snowluma.dir,
-        fallbackWebUrl: next.snowluma.webUrl,
-      });
+      applyConfig(next);
       return { ok: true };
     } catch (err) {
       return { ok: false, error: (err as Error).message };
@@ -293,14 +519,9 @@ function registerIpc(): void {
 
   ipcMain.handle('config:reset', () => {
     const fresh = store.resetConfig();
-    rcon.updateConfig(fresh.rcon);
-    onebot.updateConfig(fresh.onebot);
-    applyVerifyServerConfig(fresh);
-    router.updateConfig(fresh);
-    snowLuma.updateOptions({
-      customDir: fresh.snowluma.dir,
-      fallbackWebUrl: fresh.snowluma.webUrl,
-    });
+    // resetConfig 已落盘，这里再走一次统一的「切换组件」路径，
+    // 保证以后新增组件时不会漏掉恢复默认这一条路径
+    applyConfig(fresh);
     return fresh;
   });
 
@@ -479,6 +700,7 @@ app.whenReady().then(async () => {
 
   wireEvents();
   registerIpc();
+  registerDataIpc();
   createWindow();
 
   // 等渲染进程就绪后再发起连接，避免状态推送早于页面加载

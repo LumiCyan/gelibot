@@ -1,7 +1,20 @@
-import React, { useState } from 'react';
-import type { SnowLumaStatus } from '../../shared/types';
+import React, { useCallback, useEffect, useState } from 'react';
+import type { DataDirInfo, DataTransferResult, SnowLumaStatus } from '../../shared/types';
 import type { PageProps } from '../App';
 import { SnowLumaCard } from './SnowLumaCard';
+
+/** 把字节数显示成人看得懂的形式 */
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/** 把一次导出/导入/迁移的结果整成可读文本 */
+function renderTransferResult(title: string, res: DataTransferResult): string {
+  if (!res.ok) return `✘ ${title}：${res.error ?? '未知错误'}`;
+  return [`✔ ${title}`, ...(res.lines ?? []).map((l) => `· ${l}`)].join('\n');
+}
 
 export function ConnectionPage({
   config,
@@ -9,10 +22,52 @@ export function ConnectionPage({
   patch,
   snowluma,
   onReset,
-}: PageProps & { snowluma: SnowLumaStatus | null; onReset: () => void }) {
+  onReload,
+}: PageProps & {
+  snowluma: SnowLumaStatus | null;
+  onReset: () => void;
+  /** 导入配置成功后重新拉取配置 */
+  onReload: () => void;
+}) {
   const [testOutput, setTestOutput] = useState('');
   const [verifyOutput, setVerifyOutput] = useState('');
   const [busy, setBusy] = useState(false);
+
+  // ---------- 数据与备份 ----------
+  const [dataInfo, setDataInfo] = useState<DataDirInfo | null>(null);
+  const [dataOutput, setDataOutput] = useState('');
+  const [dataBusy, setDataBusy] = useState(false);
+  const [withSecrets, setWithSecrets] = useState(false);
+
+  const refreshDataInfo = useCallback(() => {
+    void window.bridge.getDataDirInfo().then(setDataInfo);
+  }, []);
+
+  useEffect(() => {
+    refreshDataInfo();
+  }, [refreshDataInfo]);
+
+  const runDataAction = async (
+    title: string,
+    action: () => Promise<DataTransferResult>,
+    opts: { reload?: boolean } = {},
+  ) => {
+    setDataBusy(true);
+    setDataOutput(`正在执行：${title} …`);
+    try {
+      const res = await action();
+      setDataOutput(renderTransferResult(title, res));
+      if (res.ok) {
+        refreshDataInfo();
+        // 导入会整体替换配置，必须让上层重新拉一次，否则界面还显示旧值
+        if (opts.reload) onReload();
+      }
+    } catch (err) {
+      setDataOutput(`✘ ${title}：${(err as Error).message}`);
+    } finally {
+      setDataBusy(false);
+    }
+  };
 
   const testRcon = async () => {
     setBusy(true);
@@ -443,6 +498,123 @@ export function ConnectionPage({
             恢复默认配置
           </button>
         </div>
+      </div>
+
+      <div className="card">
+        <h2 className="card-title">数据与备份</h2>
+        <p className="card-desc">
+          配置、绑定关系、审计记录与待发验证码都存在下面这个目录里。
+          <strong>把它和 exe 放在一起，换任何版本、任何电脑都不需要重新配置。</strong>
+        </p>
+
+        {!dataInfo ? (
+          <p className="hint">正在读取数据目录信息…</p>
+        ) : (
+          <>
+            <div className="field">
+              <label>当前数据目录</label>
+              <div className="data-path-row">
+                <input
+                  type="text"
+                  className="mono"
+                  readOnly
+                  value={dataInfo.dir}
+                  onFocus={(e) => e.currentTarget.select()}
+                />
+                <button
+                  className="btn"
+                  onClick={() => void window.bridge.openDataDir()}
+                >
+                  打开目录
+                </button>
+              </div>
+              <p className="hint">
+                {dataInfo.source === 'portable' ? (
+                  <span className="tag ok">跟随程序</span>
+                ) : (
+                  <span className="tag">系统用户目录</span>
+                )}{' '}
+                {dataInfo.reason}
+              </p>
+            </div>
+
+            {dataInfo.warning && <div className="banner warn">{dataInfo.warning}</div>}
+
+            {dataInfo.files.length > 0 && (
+              <p className="hint">
+                目录内文件：
+                {dataInfo.files
+                  .map((f) => `${f.name}（${formatSize(f.size)}）`)
+                  .join('、')}
+              </p>
+            )}
+
+            <div className="btn-row">
+              <button
+                className="btn"
+                disabled={dataBusy}
+                onClick={() =>
+                  void runDataAction(
+                    '导出配置',
+                    () => window.bridge.exportData(withSecrets),
+                  )
+                }
+              >
+                导出配置…
+              </button>
+              <label className="data-check">
+                <input
+                  type="checkbox"
+                  checked={withSecrets}
+                  onChange={(e) => setWithSecrets(e.target.checked)}
+                />
+                包含 RCON 密码等敏感信息
+              </label>
+            </div>
+            <p className="hint">
+              导出一个 JSON 文件，跨版本、跨电脑都能用。不勾选时会剔除密码，
+              导入到新机器后需要重新填写一次。
+            </p>
+
+            <div className="btn-row">
+              <button
+                className="btn"
+                disabled={dataBusy}
+                onClick={() =>
+                  void runDataAction('导入配置', () => window.bridge.importData(), {
+                    reload: true,
+                  })
+                }
+              >
+                导入配置…
+              </button>
+              {dataInfo.canMoveToPortable && (
+                <button
+                  className="btn"
+                  disabled={dataBusy}
+                  onClick={() =>
+                    void runDataAction('把配置存到程序目录', () =>
+                      window.bridge.moveDataToPortable(),
+                    )
+                  }
+                >
+                  把配置存到程序目录（绿色版）
+                </button>
+              )}
+            </div>
+
+            {dataInfo.portableDir && (
+              <p className="hint">
+                程序目录：<span className="mono">{dataInfo.portableDir}</span>
+                {dataInfo.canMoveToPortable
+                  ? '　—— 点「把配置存到程序目录」并重启后，配置就会跟随程序，以后换版本不用重新配置。'
+                  : ''}
+              </p>
+            )}
+
+            {dataOutput && <div className="output">{dataOutput}</div>}
+          </>
+        )}
       </div>
     </>
   );

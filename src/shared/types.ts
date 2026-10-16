@@ -315,6 +315,54 @@ export interface RconResult {
   error?: string;
 }
 
+// ---------------------------------------------------------------------------
+// 数据目录 / 备份
+// ---------------------------------------------------------------------------
+
+/** 数据目录的归属：portable = 跟随程序，user = 系统用户目录 */
+export type DataDirSource = 'portable' | 'user';
+
+export interface DataFileInfo {
+  name: string;
+  /** 字节数 */
+  size: number;
+  /** 最后修改时间（ISO）*/
+  mtime: string;
+}
+
+/** 当前数据目录的完整情况，用于连接设置页的「数据与备份」卡片 */
+export interface DataDirInfo {
+  /** 当前实际使用的 data 目录（绝对路径）*/
+  dir: string;
+  source: DataDirSource;
+  /** 决策原因，直接展示给用户 */
+  reason: string;
+  /** 需要提醒的异常，例如程序目录不可写 */
+  warning?: string;
+  /** 程序目录（便携版 = 放 exe 的文件夹）；开发模式下为 null */
+  portableDir: string | null;
+  /** 是否支持「把配置存到程序目录」*/
+  canMoveToPortable: boolean;
+  /** 程序目录下已存在的 data 目录（已存在时给出路径，用于提示冲突）*/
+  existingPortableDataDir: string | null;
+  /** data 目录内的文件清单 */
+  files: DataFileInfo[];
+}
+
+/** 导出 / 导入 / 迁移的统一返回 */
+export interface DataTransferResult {
+  ok: boolean;
+  error?: string;
+  /** 涉及的文件路径 */
+  path?: string;
+  /** 写入的字节数（导出时）*/
+  bytes?: number;
+  /** 面向用户的结果要点，逐条展示 */
+  lines?: string[];
+  /** 导入后配置是否已变化（渲染层据此重新拉取）*/
+  configChanged?: boolean;
+}
+
 /** preload 暴露给渲染进程的 API */
 export interface BridgeApi {
   getConfig(): Promise<AppConfig>;
@@ -375,4 +423,17 @@ export interface BridgeApi {
   pickSnowLumaDir(): Promise<string | null>;
   /** 内置 SnowLuma 程序目录（不存在时为 null） */
   getBundledSnowLumaDir(): Promise<string | null>;
+
+  // ---------- 数据目录与备份 ----------
+
+  /** 当前数据目录的位置、来源与文件清单 */
+  getDataDirInfo(): Promise<DataDirInfo>;
+  /** 导出配置到文件（弹出保存对话框）*/
+  exportData(includeSecrets: boolean): Promise<DataTransferResult>;
+  /** 从文件导入配置（弹出打开对话框）*/
+  importData(): Promise<DataTransferResult>;
+  /** 把当前配置整体复制到程序目录（绿色版模式，重启后生效）*/
+  moveDataToPortable(): Promise<DataTransferResult>;
+  /** 在系统文件管理器里打开数据目录 */
+  openDataDir(): Promise<{ ok: boolean; error?: string }>;
 }

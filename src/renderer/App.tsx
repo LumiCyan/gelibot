@@ -106,6 +106,13 @@ export function App() {
     showToast('ok', '已恢复默认配置');
   }, [showToast]);
 
+  /** 外部改动了配置（例如导入）后重新拉取，避免界面还显示旧值 */
+  const reload = useCallback(async () => {
+    const fresh = await window.bridge.getConfig();
+    setConfig(fresh);
+    setDirty(false);
+  }, []);
+
   if (!config) {
     return <div className="empty">正在加载配置…</div>;
   }
@@ -193,7 +200,12 @@ export function App() {
           )}
 
           {page === 'connection' && (
-            <ConnectionPage {...pageProps} snowluma={snowluma} onReset={reset} />
+            <ConnectionPage
+              {...pageProps}
+              snowluma={snowluma}
+              onReset={reset}
+              onReload={reload}
+            />
           )}
           {page === 'whitelist' && <WhitelistPage {...pageProps} />}
           {page === 'commands' && <CommandsPage {...pageProps} />}

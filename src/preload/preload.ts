@@ -61,6 +61,14 @@ const api: BridgeApi = {
   getSnowLumaLog: () => ipcRenderer.invoke('snowluma:log'),
   pickSnowLumaDir: () => ipcRenderer.invoke('snowluma:pickDir'),
   getBundledSnowLumaDir: () => ipcRenderer.invoke('snowluma:bundledDir'),
+
+  // ---------- 数据目录与备份 ----------
+
+  getDataDirInfo: () => ipcRenderer.invoke('data:info'),
+  exportData: (includeSecrets: boolean) => ipcRenderer.invoke('data:export', includeSecrets),
+  importData: () => ipcRenderer.invoke('data:import'),
+  moveDataToPortable: () => ipcRenderer.invoke('data:moveToPortable'),
+  openDataDir: () => ipcRenderer.invoke('data:openDir'),
 };
 
 contextBridge.exposeInMainWorld('bridge', api);

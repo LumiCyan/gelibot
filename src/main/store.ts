@@ -4,6 +4,54 @@ import type { AppConfig, AuditEntry, Binding } from '../shared/types';
 import { createDefaultConfig } from '../shared/defaults';
 
 /**
+ * 把任意来源的（可能残缺的、老版本的）配置与默认值做深度合并，
+ * 保证新增字段自动补齐。
+ *
+ * 独立成导出函数是因为「导入配置」也要走同一条链路：
+ * 用户从旧版本导出的配置导入后，同样需要补齐这一版新增的字段。
+ */
+export function mergeConfigWithDefaults(saved: Partial<AppConfig>): AppConfig {
+  const defaults = createDefaultConfig();
+  const savedBinding = (saved.binding ?? {}) as Partial<AppConfig['binding']>;
+  const savedVerify = (saved.verifyServer ?? {}) as Partial<
+    AppConfig['verifyServer']
+  >;
+  return {
+    ...defaults,
+    ...saved,
+    rcon: { ...defaults.rcon, ...(saved.rcon ?? {}) },
+    // 验证服是两级嵌套（enabled / autoWhitelist / rcon），必须逐层合并，
+    // 否则老配置升级后会丢掉 rcon 里的 host/port 等字段
+    verifyServer: {
+      ...defaults.verifyServer,
+      ...savedVerify,
+      rcon: { ...defaults.verifyServer.rcon, ...(savedVerify.rcon ?? {}) },
+    },
+    onebot: { ...defaults.onebot, ...(saved.onebot ?? {}) },
+    whitelist: { ...defaults.whitelist, ...(saved.whitelist ?? {}) },
+    // snowluma 也是嵌套对象，同样要展开合并
+    snowluma: { ...defaults.snowluma, ...(saved.snowluma ?? {}) },
+    // binding 存在两级嵌套，必须逐层合并，否则老配置升级后会丢掉新增的模板字段
+    binding: {
+      ...defaults.binding,
+      ...savedBinding,
+      forceBind: {
+        ...defaults.binding.forceBind,
+        ...(savedBinding.forceBind ?? {}),
+      },
+      messages: {
+        ...defaults.binding.messages,
+        ...(savedBinding.messages ?? {}),
+      },
+    },
+    commands:
+      Array.isArray(saved.commands) && saved.commands.length > 0
+        ? saved.commands
+        : defaults.commands,
+  };
+}
+
+/**
  * 极简的 JSON 持久化层。
  * 所有数据放在用户数据目录下的 data/ 子目录，避免污染安装目录。
  */
@@ -53,45 +101,8 @@ export class Store {
 
   /** 读取配置，并与默认值做深度合并，保证新增字段自动补齐 */
   private loadConfig(): AppConfig {
-    const defaults = createDefaultConfig();
     const saved = this.loadJson<Partial<AppConfig>>(this.configFile, {});
-    const savedBinding = (saved.binding ?? {}) as Partial<AppConfig['binding']>;
-    const savedVerify = (saved.verifyServer ?? {}) as Partial<
-      AppConfig['verifyServer']
-    >;
-    const merged: AppConfig = {
-      ...defaults,
-      ...saved,
-      rcon: { ...defaults.rcon, ...(saved.rcon ?? {}) },
-      // 验证服是两级嵌套（enabled / autoWhitelist / rcon），必须逐层合并，
-      // 否则老配置升级后会丢掉 rcon 里的 host/port 等字段
-      verifyServer: {
-        ...defaults.verifyServer,
-        ...savedVerify,
-        rcon: { ...defaults.verifyServer.rcon, ...(savedVerify.rcon ?? {}) },
-      },
-      onebot: { ...defaults.onebot, ...(saved.onebot ?? {}) },
-      whitelist: { ...defaults.whitelist, ...(saved.whitelist ?? {}) },
-      // snowluma 也是嵌套对象，同样要展开合并
-      snowluma: { ...defaults.snowluma, ...(saved.snowluma ?? {}) },
-      // binding 存在两级嵌套，必须逐层合并，否则老配置升级后会丢掉新增的模板字段
-      binding: {
-        ...defaults.binding,
-        ...savedBinding,
-        forceBind: {
-          ...defaults.binding.forceBind,
-          ...(savedBinding.forceBind ?? {}),
-        },
-        messages: {
-          ...defaults.binding.messages,
-          ...(savedBinding.messages ?? {}),
-        },
-      },
-      commands: Array.isArray(saved.commands) && saved.commands.length > 0
-        ? saved.commands
-        : defaults.commands,
-    };
-    return merged;
+    return mergeConfigWithDefaults(saved);
   }
 
   getConfig(): AppConfig {
