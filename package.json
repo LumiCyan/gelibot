@@ -1,7 +1,7 @@
 {
   "name": "gelibot",
   "productName": "GeLi Bot",
-  "version": "1.16.0",
+  "version": "1.17.0",
   "description": "GeLi Bot — QQ (SnowLuma/OneBot v11) 与 Minecraft 服务器 RCON 桥接的 Windows 桌面端",
   "main": "dist/main/main.js",
   "private": true,

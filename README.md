@@ -16,13 +16,13 @@
 
 ## 下载
 
-从 [Releases](https://github.com/LumiCyan/gelibot/releases/latest) 取 **`GeLi Bot v1.16.0.exe`**：
+从 [Releases](https://github.com/LumiCyan/gelibot/releases/latest) 取 **`GeLi Bot v1.17.0.exe`**：
 
 - 单文件绿色版，双击即用，无需安装
-- 97,697,975 字节（约 93 MB）
+- 97,718,412 字节（约 93 MB）
 - Windows 10 / 11 x64
 
-SHA256：`efbc1ac55abdfa5b03ca59f60af4d92b7e44b27066bbf6a689601395adaaadc5`
+SHA256：`e96cba625ef8f0a936f5234f704f6c71db7654452bc2fd6977f03d6c7a65128f`
 
 ---
 
@@ -128,7 +128,7 @@ npm run dev
 
 ## 打包为 exe
 
-产物：**`GeLi Bot v1.16.0.exe`**（单文件绿色版，93 MB / 97,697,975 字节，双击即用）
+产物：**`GeLi Bot v1.17.0.exe`**（单文件绿色版，93 MB / 97,718,412 字节，双击即用）
 ——其中约 60 MB 压缩后来自内置的 SnowLuma 运行包（原始 97 MB）。
 
 ```bash
@@ -723,7 +723,7 @@ npm test          # 构建主进程 + 跑全部三套测试
 - **在线展示图片卡片**：`/在线` 发图（服务器名可自定义、玩家 QQ 头像、插件服兼容、
   失败自动降级文字、界面可预览）
 - **内置 SnowLuma 完整版 + 一键启动器**（启动 / 停止 / 打开后台 / 抓取临时凭据 / 随程序退出）
-- **打包为单文件绿色版 exe**（`GeLi Bot v1.16.0.exe`，含自绘图标与内置 SnowLuma）
+- **打包为单文件绿色版 exe**（`GeLi Bot v1.17.0.exe`，含自绘图标与内置 SnowLuma）
 
 **尚未实现**
 
