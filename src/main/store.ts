@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { AppConfig, AuditEntry, Binding } from '../shared/types';
+import type { AppConfig, AuditEntry, Binding, PlayerStats } from '../shared/types';
 import { createDefaultConfig } from '../shared/defaults';
 
 /**
@@ -33,6 +33,8 @@ export function mergeConfigWithDefaults(saved: Partial<AppConfig>): AppConfig {
     presence: { ...defaults.presence, ...(saved.presence ?? {}) },
     // snowluma 也是嵌套对象，同样要展开合并
     snowluma: { ...defaults.snowluma, ...(saved.snowluma ?? {}) },
+    // update 是单层嵌套（customUrl / repoUrl），展开合并以便将来加字段
+    update: { ...defaults.update, ...(saved.update ?? {}) },
     // binding 存在两级嵌套，必须逐层合并，否则老配置升级后会丢掉新增的模板字段
     binding: {
       ...defaults.binding,
@@ -50,6 +52,76 @@ export function mergeConfigWithDefaults(saved: Partial<AppConfig>): AppConfig {
       Array.isArray(saved.commands) && saved.commands.length > 0
         ? saved.commands
         : defaults.commands,
+    // 新增功能域的嵌套字段逐层展开，保证老配置升级后自动补齐子字段
+    logWatcher: { ...defaults.logWatcher, ...(saved.logWatcher ?? {}) },
+    chatBridge: {
+      ...defaults.chatBridge,
+      ...(saved.chatBridge ?? {}),
+      gameToChat: {
+        ...defaults.chatBridge.gameToChat,
+        ...(saved.chatBridge?.gameToChat ?? {}),
+      },
+      chatToGame: {
+        ...defaults.chatBridge.chatToGame,
+        ...(saved.chatBridge?.chatToGame ?? {}),
+      },
+      quietHours: {
+        ...defaults.chatBridge.quietHours,
+        ...(saved.chatBridge?.quietHours ?? {}),
+      },
+      blockPatterns: Array.isArray(saved.chatBridge?.blockPatterns)
+        ? saved.chatBridge!.blockPatterns
+        : defaults.chatBridge.blockPatterns,
+      replacements: Array.isArray(saved.chatBridge?.replacements)
+        ? saved.chatBridge!.replacements
+        : defaults.chatBridge.replacements,
+    },
+    responder: {
+      ...defaults.responder,
+      ...(saved.responder ?? {}),
+      rules: Array.isArray(saved.responder?.rules)
+        ? saved.responder!.rules
+        : defaults.responder.rules,
+    },
+    permissions: {
+      ...defaults.permissions,
+      ...(saved.permissions ?? {}),
+      groups: Array.isArray(saved.permissions?.groups)
+        ? saved.permissions!.groups
+        : defaults.permissions.groups,
+    },
+    tasks: {
+      ...defaults.tasks,
+      ...(saved.tasks ?? {}),
+      tasks: Array.isArray(saved.tasks?.tasks)
+        ? saved.tasks!.tasks
+        : defaults.tasks.tasks,
+    },
+    stats: { ...defaults.stats, ...(saved.stats ?? {}) },
+    ai: { ...defaults.ai, ...(saved.ai ?? {}) },
+    imageReply: { ...defaults.imageReply, ...(saved.imageReply ?? {}) },
+    ownerCare: {
+      ...defaults.ownerCare,
+      ...(saved.ownerCare ?? {}),
+      groups: Array.isArray(saved.ownerCare?.groups)
+        ? saved.ownerCare!.groups
+        : defaults.ownerCare.groups,
+    },
+    notify: {
+      ...defaults.notify,
+      ...(saved.notify ?? {}),
+      join: { ...defaults.notify.join, ...(saved.notify?.join ?? {}) },
+      leave: { ...defaults.notify.leave, ...(saved.notify?.leave ?? {}) },
+      death: { ...defaults.notify.death, ...(saved.notify?.death ?? {}) },
+      advancement: {
+        ...defaults.notify.advancement,
+        ...(saved.notify?.advancement ?? {}),
+      },
+      serverStart: {
+        ...defaults.notify.serverStart,
+        ...(saved.notify?.serverStart ?? {}),
+      },
+    },
   };
 }
 
@@ -62,21 +134,25 @@ export class Store {
   private readonly configFile: string;
   private readonly bindingsFile: string;
   private readonly auditFile: string;
+  private readonly statsFile: string;
 
   private config: AppConfig;
   private bindings: Binding[];
   private audit: AuditEntry[] = [];
+  private stats: PlayerStats[] = [];
 
   constructor(baseDir: string) {
     this.dir = baseDir;
     this.configFile = path.join(baseDir, 'config.json');
     this.bindingsFile = path.join(baseDir, 'bindings.json');
     this.auditFile = path.join(baseDir, 'audit.json');
+    this.statsFile = path.join(baseDir, 'stats.json');
 
     fs.mkdirSync(this.dir, { recursive: true });
     this.config = this.loadConfig();
     this.bindings = this.loadJson<Binding[]>(this.bindingsFile, []);
     this.audit = this.loadJson<AuditEntry[]>(this.auditFile, []);
+    this.stats = this.loadJson<PlayerStats[]>(this.statsFile, []);
 
     // 首次运行时落盘，方便用户直接查看与备份配置
     if (!fs.existsSync(this.configFile)) {
@@ -196,5 +272,16 @@ export class Store {
   clearAudit(): void {
     this.audit = [];
     this.writeJson(this.auditFile, this.audit);
+  }
+
+  // ---------- 玩家统计 ----------
+
+  loadStats(): PlayerStats[] {
+    return this.stats.map((s) => ({ ...s }));
+  }
+
+  saveStats(list: PlayerStats[]): void {
+    this.stats = list;
+    this.writeJson(this.statsFile, this.stats);
   }
 }

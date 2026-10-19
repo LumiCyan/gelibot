@@ -29,7 +29,7 @@
  * 用法：node scripts/build-release.mjs [--dir]
  *   环境变量 GC_OUT_DIR 可指定输出目录，默认 dist-release。
  */
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -111,6 +111,26 @@ try {
   console.warn(`[build-release] app-builder 补丁失败，将使用原版：${err.message}`);
 }
 
+// --- 1.5 预置工具链（winCodeSign 写图标 + NSIS 编译安装包） -----------------
+// 都是幂等的：脚本内部检测到已缓存就跳过。联网失败这里只告警不中断，
+// 让 electron-builder 自己去下载兜底（或明确报错）。
+try {
+  execFileSync(process.execPath, [path.join(ROOT, 'scripts', 'fetch-wincodesign.mjs')], {
+    cwd: ROOT,
+    stdio: 'inherit',
+  });
+} catch (err) {
+  console.warn('[build-release] winCodeSign 预置失败：', err.message);
+}
+try {
+  execFileSync(process.execPath, [path.join(ROOT, 'scripts', 'fetch-nsis.mjs')], {
+    cwd: ROOT,
+    stdio: 'inherit',
+  });
+} catch (err) {
+  console.warn('[build-release] NSIS 预置失败：', err.message);
+}
+
 // --- 2. 组装环境变量 --------------------------------------------------------
 const env = { ...process.env };
 if (patchedBuilder) {
@@ -122,9 +142,16 @@ env.ELECTRON_BUILDER_BINARIES_MIRROR =
   'https://npmmirror.com/mirrors/electron-builder-binaries/';
 
 // --- 3. 调用 electron-builder ----------------------------------------------
+// 直接调 cli.js 而非 `npx electron-builder`：受限网络/环境里 node_modules/.bin
+// 可能缺失（npx 找不到可执行入口），直接调入口文件最稳。
+const ebCli = path.join(ROOT, 'node_modules', 'electron-builder', 'out', 'cli', 'cli.js');
+if (!fs.existsSync(ebCli)) {
+  console.error(`[build-release] 找不到 electron-builder 入口：${ebCli}`);
+  process.exit(1);
+}
 const dirOnly = process.argv.includes('--dir');
 const args = [
-  'electron-builder',
+  ebCli,
   '--config',
   'electron-builder.config.js',
   '--win',
@@ -145,7 +172,7 @@ if (build.status !== 0) {
 
 const outDir = env.GC_OUT_DIR || 'dist-release';
 console.log(`[build-release] electron-builder -> ${outDir} ...`);
-const res = spawnSync('npx', args, {
+const res = spawnSync(process.execPath, args, {
   cwd: ROOT,
   env,
   stdio: 'inherit',

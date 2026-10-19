@@ -71,7 +71,8 @@ async function main() {
   let buf = null;
   let lastErr = null;
   for (const base of MIRRORS) {
-    const url = `${base}${ARCHIVE}`;
+    // 真实 URL 带一层目录：.../download/<dirName>/<dirName>.7z
+    const url = `${base}${ARCHIVE.replace('.7z', '')}/${ARCHIVE}`;
     try {
       log(`尝试下载 ${url}`);
       buf = await download(url);

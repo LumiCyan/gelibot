@@ -54,9 +54,12 @@ module.exports = {
   compression: 'maximum',
 
   win: {
-    // 单文件绿色版，双击即用，无需安装
+    // 同时产出两种形态：
+    //   - portable：单文件绿色版，双击即用，无需安装
+    //   - nsis：标准安装程序，可选安装目录、创建快捷方式、带卸载器
     target: [
       { target: 'portable', arch: ['x64'] },
+      { target: 'nsis', arch: ['x64'] },
     ],
     artifactName: 'GeLi Bot v${version}.${ext}',
     icon: 'build/icon.ico',
@@ -90,6 +93,32 @@ module.exports = {
     artifactName: 'GeLi Bot v${version}.${ext}',
     // portable 运行时把应用解到这个临时目录；不要带空格，避免个别环境路径处理出问题
     unpackDirName: 'GeLiBot',
+  },
+
+  nsis: {
+    artifactName: 'GeLi Bot Setup ${version}.${ext}',
+    // 允许用户选择安装目录（默认 perMachine 到 Program Files）
+    oneClick: false,
+    // 允许用户选择是否创建桌面快捷方式
+    allowToChangeInstallationDirectory: true,
+    perMachine: false,
+    // 安装后允许直接启动
+    createDesktopShortcut: true,
+    createStartMenuShortcut: true,
+    shortcutName: 'GeLi Bot',
+    // 卸载器展示名
+    uninstallDisplayName: 'GeLi Bot',
+    // 多语言界面：简体中文优先，回退英文
+    installerLanguages: ['zh_CN', 'en_US'],
+    language: '2052',
+    multiLanguageInstaller: false,
+    // 安装包差异化标题
+    installerIcon: 'build/icon.ico',
+    uninstallerIcon: 'build/icon.ico',
+    // 默认安装目录名（不含空格更稳妥）
+    installerHeaderIcon: 'build/icon.ico',
+    // 关闭「是否运行」的勾选提示里附带自动更新字样（本项目自带更新，不接 Squirrel）
+    runAfterFinish: true,
   },
 
   // 关闭自动更新相关逻辑，避免打包时联网检查

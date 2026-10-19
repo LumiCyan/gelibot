@@ -1,9 +1,20 @@
 import type {
+  AIConfig,
   AppConfig,
   BindingConfig,
+  ChatBridgeConfig,
   CommandRule,
+  ImageReplyConfig,
+  LogWatcherConfig,
+  NotifyConfig,
+  OwnerCareConfig,
+  PermissionConfig,
   PresenceConfig,
+  ResponderConfig,
   SnowLumaConfig,
+  StatsConfig,
+  TaskConfig,
+  UpdateChannel,
   VerifyServerConfig,
 } from './types';
 
@@ -206,6 +217,164 @@ function defaultCommands(): CommandRule[] {
   ];
 }
 
+/** 默认日志监听配置：默认关闭，不启用时一切行为与旧版一致 */
+export function createDefaultLogWatcherConfig(): LogWatcherConfig {
+  return {
+    enabled: false,
+    logPath: '',
+    serverDir: '',
+    replayHistory: false,
+    botPrefixes: ['Bot_', 'BOT_', 'bot_'],
+    filterBots: true,
+  };
+}
+
+/** 默认群服消息互通配置：默认关闭 */
+export function createDefaultChatBridgeConfig(): ChatBridgeConfig {
+  return {
+    enabled: false,
+    gameToChat: {
+      enabled: true,
+      groups: [],
+      template: '[游戏] {player}: {message}',
+    },
+    chatToGame: {
+      enabled: true,
+      groups: [],
+      template: '[群] {nickname}: {message}',
+      skipCommands: true,
+      mergeWindowMs: 0,
+    },
+    blockPatterns: [],
+    replacements: [],
+    quietHours: { start: 0, end: 0 },
+    maxLength: 200,
+  };
+}
+
+/** 默认自动回复配置：默认关闭，规则为空 */
+export function createDefaultResponderConfig(): ResponderConfig {
+  return {
+    enabled: false,
+    rules: [],
+  };
+}
+
+/** 默认权限组配置：默认关闭。关闭时沿用原有的「管理员/普通用户」二元权限 */
+export function createDefaultPermissionConfig(): PermissionConfig {
+  return {
+    enabled: false,
+    groups: [],
+  };
+}
+
+/** 默认定时任务配置：默认关闭，任务为空 */
+export function createDefaultTaskConfig(): TaskConfig {
+  return {
+    enabled: false,
+    tasks: [],
+  };
+}
+
+/** 默认统计配置：默认关闭 */
+export function createDefaultStatsConfig(): StatsConfig {
+  return {
+    enabled: false,
+    maxPlayers: 2000,
+  };
+}
+
+/** 默认事件通知配置：默认关闭 */
+export function createDefaultNotifyConfig(): NotifyConfig {
+  return {
+    enabled: false,
+    groups: [],
+    join: { enabled: true, template: '[进服] {player} 加入了服务器' },
+    leave: { enabled: true, template: '[退服] {player} 离开了服务器' },
+    death: { enabled: true, template: '[死亡] {player} {detail}' },
+    advancement: { enabled: false, template: '[成就] {player} 达成了 {detail}' },
+    serverStart: { enabled: false, template: '[服务器] 已启动' },
+  };
+}
+
+/**
+ * 默认 AI 配置：默认关闭，且不预填任何 Key。
+ *
+ * 协议选 OpenAI 兼容（/chat/completions）而不是某一家 SDK：
+ * DeepSeek、OpenAI、通义、Kimi、本地 Ollama / LM Studio 都实现了这套接口，
+ * 用户只需换 baseUrl + model 就能切服务商，不必改代码、不用更新客户端。
+ */
+export function createDefaultAIConfig(): AIConfig {
+  return {
+    enabled: false,
+    baseUrl: 'https://api.deepseek.com/v1',
+    apiKey: '',
+    model: 'deepseek-chat',
+    trigger: 'both',
+    systemPrompt:
+      '你是 Minecraft 服务器 QQ 群的管理助手。回答要简短、准确、口语化，' +
+      '一般不超过 100 字。不确定的事情直接说不知道，不要编造服务器规则或数据。' +
+      '不要输出任何命令、代码块或 Markdown 标记。',
+    temperature: 0.7,
+    maxTokens: 500,
+    timeoutMs: 20000,
+    contextTurns: 5,
+    dailyQuotaPerUser: 30,
+    fallbackToAI: false,
+    mentionOnReply: false,
+    allowPlayerProfile: true,
+  };
+}
+
+/**
+ * 默认图片回复配置：默认关闭。
+ *
+ * 关闭时所有回复保持纯文本，行为与旧版逐字节一致。
+ * 阈值默认「3 行或 60 字」——短回复出图反而更难读，
+ * 群里看一行字比点开一张图快。
+ */
+export function createDefaultImageReplyConfig(): ImageReplyConfig {
+  return {
+    enabled: false,
+    scope: 'command',
+    minLines: 3,
+    minChars: 60,
+    keepFiles: 60,
+    showTime: true,
+    theme: 'dark',
+    width: 600,
+    scale: 1,
+    watermark: '',
+  };
+}
+
+/** 本地日期 YYYY-MM-DD（默认起始日要用「今天」） */
+function todayStr(): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/**
+ * 默认慰问服主配置：默认关闭，起始日 = 首次创建配置的当天。
+ *
+ * 起始日当天算第 1 天，所以第一次启用时播报的就是「离开 1 天」。
+ */
+export function createDefaultOwnerCareConfig(): OwnerCareConfig {
+  return {
+    enabled: false,
+    startDate: todayStr(),
+    groups: [],
+    dailyAt: '20:00',
+    template: '【慰问服主】{owner}离开 {days} 天了',
+    ownerName: '服主',
+    ownerQQ: '',
+    mentionOwner: false,
+  };
+}
+
 export function createDefaultConfig(): AppConfig {
   return {
     rcon: {
@@ -235,5 +404,24 @@ export function createDefaultConfig(): AppConfig {
     commands: defaultCommands(),
     serverId: 'main',
     rateLimitMs: 1500,
+    update: createDefaultUpdateChannel(),
+    logWatcher: createDefaultLogWatcherConfig(),
+    chatBridge: createDefaultChatBridgeConfig(),
+    responder: createDefaultResponderConfig(),
+    permissions: createDefaultPermissionConfig(),
+    tasks: createDefaultTaskConfig(),
+    stats: createDefaultStatsConfig(),
+    notify: createDefaultNotifyConfig(),
+    ai: createDefaultAIConfig(),
+    imageReply: createDefaultImageReplyConfig(),
+    ownerCare: createDefaultOwnerCareConfig(),
+  };
+}
+
+/** 默认更新源：GitHub 官方仓库（可在设置里改成自定义静态源） */
+export function createDefaultUpdateChannel(): UpdateChannel {
+  return {
+    customUrl: '',
+    repoUrl: 'lumicyan/gelibot',
   };
 }

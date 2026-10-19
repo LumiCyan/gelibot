@@ -4,7 +4,12 @@ node_modules/
 # 构建产物
 dist/
 dist-release*/
+dist-build*/
 release/
+# 发布资产（exe + 差量包，几百 MB，走 Release 附件分发，不进仓库）
+release-assets*/
+# 差量基线（可从任意历史 Release 的 app-<版本>.asar 取回，不必入库）
+old-asar/
 
 # 内置的 SnowLuma 运行包（97 MB，不进仓库；由 scripts/fetch-snowluma.mjs 拉取）
 snowluma/

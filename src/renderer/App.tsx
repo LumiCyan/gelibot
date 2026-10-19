@@ -6,22 +6,52 @@ import { CommandsPage } from './pages/CommandsPage';
 import { BindingsPage } from './pages/BindingsPage';
 import { ConsolePage } from './pages/ConsolePage';
 import { AuditPage } from './pages/AuditPage';
+import { UpdatePage } from './pages/UpdatePage';
+import { ChatBridgePage } from './pages/ChatBridgePage';
+import { ResponderPage } from './pages/ResponderPage';
+import { StatsPage } from './pages/StatsPage';
+import { TaskPage } from './pages/TaskPage';
+import { AIPage } from './pages/AIPage';
+import { ImageReplyPage } from './pages/ImageReplyPage';
+import { OwnerCarePage } from './pages/OwnerCarePage';
 
 export type PageKey =
   | 'connection'
-  | 'whitelist'
-  | 'commands'
   | 'bindings'
+  | 'chatbridge'
+  | 'responder'
+  | 'ai'
+  | 'imagereply'
+  | 'commands'
+  | 'whitelist'
   | 'console'
-  | 'audit';
+  | 'stats'
+  | 'tasks'
+  | 'ownercare'
+  | 'audit'
+  | 'update';
 
-const NAV: Array<{ key: PageKey; label: string }> = [
-  { key: 'connection', label: '连接设置' },
-  { key: 'whitelist', label: '群 / 私聊白名单' },
-  { key: 'commands', label: '指令管理' },
-  { key: 'bindings', label: '账号绑定' },
-  { key: 'console', label: '指令控制台' },
-  { key: 'audit', label: '审计日志' },
+/**
+ * 导航按「使用路径」排列：接入 → 身份 → 消息 → 图片 → 指令 → 数据 → AI → 自动化 → 安全 → 系统
+ *
+ * 图片渲染与 AI 各自独立成组，不再挂在「消息」下面：
+ * 它们已经不只是「回复方式」，而是整套能力（主题/字体/水印；人设/配额/画像）。
+ */
+const NAV: Array<{ key: PageKey; label: string; group?: string }> = [
+  { key: 'connection', label: '连接设置', group: '接入' },
+  { key: 'bindings', label: '账号绑定', group: '身份与权限' },
+  { key: 'chatbridge', label: '消息互通', group: '消息' },
+  { key: 'responder', label: '自动回复', group: '消息' },
+  { key: 'imagereply', label: '图片渲染', group: '图片与视觉' },
+  { key: 'commands', label: '指令管理', group: '指令' },
+  { key: 'whitelist', label: '群 / 私聊白名单', group: '指令' },
+  { key: 'console', label: '指令控制台', group: '指令' },
+  { key: 'stats', label: '玩家统计', group: '数据' },
+  { key: 'ai', label: 'AI 助手', group: 'AI' },
+  { key: 'tasks', label: '定时任务', group: '自动化' },
+  { key: 'ownercare', label: '慰问服主', group: '自动化' },
+  { key: 'audit', label: '审计日志', group: '安全' },
+  { key: 'update', label: '软件更新', group: '系统' },
 ];
 
 export interface PageProps {
@@ -181,15 +211,22 @@ export function App() {
 
       <div className="body">
         <nav className="sidebar">
-          {NAV.map((item) => (
-            <button
-              key={item.key}
-              className={`nav-item ${page === item.key ? 'active' : ''}`}
-              onClick={() => setPage(item.key)}
-            >
-              {item.label}
-            </button>
-          ))}
+          {NAV.map((item, i) => {
+            // 分组标题：与上一条的 group 不同时插一行小标题
+            const prev = i > 0 ? NAV[i - 1].group : undefined;
+            const showGroup = item.group && item.group !== prev;
+            return (
+              <React.Fragment key={item.key}>
+                {showGroup && <div className="nav-group">{item.group}</div>}
+                <button
+                  className={`nav-item ${page === item.key ? 'active' : ''}`}
+                  onClick={() => setPage(item.key)}
+                >
+                  {item.label}
+                </button>
+              </React.Fragment>
+            );
+          })}
         </nav>
 
         <main className="content">
@@ -210,8 +247,16 @@ export function App() {
           {page === 'whitelist' && <WhitelistPage {...pageProps} />}
           {page === 'commands' && <CommandsPage {...pageProps} />}
           {page === 'bindings' && <BindingsPage {...pageProps} />}
+          {page === 'chatbridge' && <ChatBridgePage {...pageProps} />}
+          {page === 'responder' && <ResponderPage {...pageProps} />}
+          {page === 'ai' && <AIPage {...pageProps} />}
+          {page === 'imagereply' && <ImageReplyPage {...pageProps} />}
+          {page === 'stats' && <StatsPage {...pageProps} />}
+          {page === 'tasks' && <TaskPage {...pageProps} />}
+          {page === 'ownercare' && <OwnerCarePage {...pageProps} />}
           {page === 'console' && <ConsolePage />}
           {page === 'audit' && <AuditPage />}
+          {page === 'update' && <UpdatePage />}
         </main>
       </div>
     </>

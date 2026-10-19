@@ -151,6 +151,22 @@ body {
   overflow-y: auto;
 }
 
+/* 侧边栏分组小标题（导航按使用路径分组） */
+.nav-group {
+  margin: 14px 4px 6px;
+  padding-left: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-muted, #8a97a6);
+  text-transform: uppercase;
+  border-left: 2px solid var(--border-strong);
+}
+
+.nav-group:first-child {
+  margin-top: 2px;
+}
+
 .nav-item {
   display: block;
   width: 100%;
@@ -248,6 +264,9 @@ body {
 input[type="text"],
 input[type="number"],
 input[type="password"],
+input[type="date"],
+/* 未显式写 type 的 <input> 默认就是 text，但属性选择器匹配不到，单独补一条 */
+input:not([type]),
 textarea,
 select {
   width: 100%;
@@ -478,6 +497,11 @@ tr:last-child td {
   margin-top: 6px;
 }
 
+/* 需要引起注意的提示（例如探测失败） */
+.hint.warn {
+  color: #b45309;
+}
+
 .banner {
   padding: 10px 13px;
   border-radius: var(--radius);
@@ -560,6 +584,23 @@ tr:last-child td {
 
 .row-flex input {
   flex: 1;
+}
+
+/* ---------- 更新进度条 ---------- */
+.progress-track {
+  flex: 1;
+  max-width: 360px;
+  height: 8px;
+  background: #eef2f7;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--primary), var(--green));
+  border-radius: 999px;
+  transition: width 0.2s ease;
 }
 
 /* ---------- 绑定模式选择卡 ---------- */

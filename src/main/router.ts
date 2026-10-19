@@ -11,6 +11,7 @@ import { PLAYER_ID_RE, renderTemplate } from './binding';
 import type { MessageEvent } from './onebot';
 import type { RconClient } from './rcon';
 import type { Store } from './store';
+import { daysSince, formatCareMessage } from './owner-care';
 
 /** 指令处理结果 */
 interface HandleResult {
@@ -30,6 +31,23 @@ export interface OnlineCardProvider {
   build(): Promise<string | null>;
 }
 
+/**
+ * AI 提供者：把「一句话问题」变成「一段回复文本」。
+ *
+ * 关键约束：AI 只能产出文本，**不能触发 RCON**。
+ * 需要联动服务器的场景（查人数等）走既有的模板化指令，不交给模型。
+ * 实现在 main 侧组装（模型调用 + 统计/在线数据拼接），router 只依赖这个窄接口。
+ */
+export interface AIProvider {
+  /** 回答问题，返回已是最终文案（失败时返回错误提示） */
+  ask(
+    question: string,
+    ctx: { qq: string; groupId?: string; nickname?: string },
+  ): Promise<string>;
+  /** 生成玩家画像（基于统计 + 绑定信息） */
+  profile(playerId: string, qq: string): Promise<string>;
+}
+
 /** 内置的绑定管理指令名（不投递 RCON，由本层直接处理） */
 const BUILTIN = {
   bind: ['绑定', 'bind'],
@@ -37,6 +55,10 @@ const BUILTIN = {
   myBind: ['我的绑定', 'mybind'],
   queryBind: ['查询绑定', '查询', 'querybind'],
   help: ['帮助', 'help', '菜单'],
+  /** AI 问答：/问 xxx 或 /ai xxx */
+  ask: ['问', 'ai', 'ask'],
+  /** 慰问服主：查询「离开第 N 天」 */
+  care: ['慰问', 'care'],
 };
 
 /**
@@ -49,6 +71,7 @@ const ARG_TAKING_BUILTINS: Array<keyof typeof BUILTIN> = [
   'bind',
   'unbind',
   'queryBind',
+  'ask',
 ];
 
 /**
@@ -84,10 +107,17 @@ export class CommandRouter {
   private lastTrigger = new Map<string, number>();
   /** 在线展示提供者（未注入时 /在线 走原生 RCON 流程） */
   private onlineCard: OnlineCardProvider | null = null;
+  /** AI 提供者（未注入或未启用时 /问 直接提示未开启） */
+  private ai: AIProvider | null = null;
 
   /** 注入在线展示提供者（图片卡片）；传 null 关闭 */
   setOnlineCardProvider(p: OnlineCardProvider | null): void {
     this.onlineCard = p;
+  }
+
+  /** 注入 AI 提供者；传 null 关闭 */
+  setAIProvider(p: AIProvider | null): void {
+    this.ai = p;
   }
 
   constructor(
@@ -187,6 +217,21 @@ export class CommandRouter {
     lines.push('/我的绑定  -  查看已绑定账号');
     if (isAdmin) {
       lines.push('/查询绑定 <QQ 或 玩家ID>  -  反查绑定归属（管理员）');
+    }
+
+    if (this.config.ai.enabled) {
+      lines.push('');
+      lines.push('—— AI ——');
+      lines.push('/问 <问题>  -  向 AI 提问（也可以直接 @我）');
+      if (this.config.ai.allowPlayerProfile) {
+        lines.push('/ai 玩家 <ID>  -  生成玩家画像');
+      }
+    }
+
+    if (this.config.ownerCare.enabled) {
+      lines.push('');
+      lines.push('—— 其他 ——');
+      lines.push('/慰问  -  看看服主已经离开多少天了');
     }
     return `可用指令：\n${lines.join('\n')}`;
   }
@@ -335,7 +380,87 @@ export class CommandRouter {
       return this.binding.query(args.join(' '));
     }
 
+    if (kind === 'ask') {
+      return this.handleAsk(qq, args, ev);
+    }
+
+    if (kind === 'care') {
+      return this.handleCare();
+    }
+
     return this.buildHelp(this.isAdmin(qq));
+  }
+
+  /**
+   * 慰问服主：查询「服主离开第 N 天」。
+   *
+   * 纯计算，不查服务器、不发外部请求，所以任何人都能随手发一下。
+   */
+  private handleCare(): string {
+    const cfg = this.config.ownerCare;
+    const days = daysSince(cfg.startDate);
+    if (days <= 0) {
+      return `起始日期还没到（${cfg.startDate || '未设置'}），暂时没什么可慰问的`;
+    }
+    return formatCareMessage(cfg.template, {
+      days,
+      owner: cfg.ownerName.trim() || '服主',
+      startDate: cfg.startDate,
+    });
+  }
+
+  /**
+   * AI 问答：`/问 <问题>`、`/ai <问题>`、`/ai 玩家 <ID>`。
+   *
+   * 三道闸门：
+   * 1. 功能未启用 / 未注入 → 明确提示，不静默
+   * 2. `/ai 玩家 xxx` 需要 allowPlayerProfile 且要求先绑定（防止枚举他人数据）
+   * 3. 其余情况直接交给 AI 提供者，由它做配额与清洗
+   */
+  private async handleAsk(
+    qq: string,
+    args: string[],
+    ev: MessageEvent,
+  ): Promise<string> {
+    if (!this.ai) {
+      return 'AI 功能未开启。管理员可在「AI 设置」里配置后使用';
+    }
+
+    const question = args.join(' ').trim();
+    if (!question) {
+      return (
+        '用法：\n' +
+        '/问 <问题>  -  直接问 AI\n' +
+        (this.config.ai.allowPlayerProfile ? '/ai 玩家 <ID>  -  生成玩家画像\n' : '') +
+        '也可以 @我 提问'
+      );
+    }
+
+    // `/ai 玩家 <ID>`：生成玩家画像
+    if (args[0] === '玩家' || args[0].toLowerCase() === 'player') {
+      if (!this.config.ai.allowPlayerProfile) {
+        return '玩家画像功能已被管理员关闭';
+      }
+      const playerId = args[1];
+      if (!playerId) return '用法：/ai 玩家 <玩家ID>';
+      if (!PLAYER_ID_RE.test(playerId)) {
+        return '玩家 ID 不合法（3-16 位字母、数字或下划线）';
+      }
+      // 非管理员只能看自己绑定的角色，避免被用来枚举他人数据
+      if (!this.isAdmin(qq)) {
+        const mine = this.binding.listOf(qq).map((b) => b.playerId.toLowerCase());
+        if (!mine.includes(playerId.toLowerCase())) {
+          return '你只能查看已绑定角色的画像';
+        }
+      }
+      return this.ai.profile(playerId, qq);
+    }
+
+    const groupId = ev.message_type === 'group' ? String(ev.group_id) : undefined;
+    const nickname =
+      (ev.sender as { card?: string; nickname?: string } | undefined)?.card ||
+      ev.sender?.nickname;
+    return this.ai.ask(question, { qq, groupId, nickname });
   }
 
   /** /绑定 无参数时的用法提示 */

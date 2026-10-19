@@ -30,6 +30,14 @@ export class CardRenderer {
   private width: number;
   private timeoutMs: number;
   private win: BrowserWindow | null = null;
+  /**
+   * 渲染串行队列。
+   *
+   * 整个进程共用同一个隐藏窗口，而「在线卡片」和「通用回复卡片」可能同时
+   * 触发（有人在群里连发 /在线 和 /tps）。并发会互相 loadURL 打断，
+   * 截出对方的内容。串行化是最简单可靠的解法，代价只是几毫秒排队。
+   */
+  private queue: Promise<unknown> = Promise.resolve();
 
   constructor(opts: CardRendererOptions) {
     this.iconUri = opts.iconUri;
@@ -37,8 +45,32 @@ export class CardRenderer {
     this.timeoutMs = opts.timeoutMs ?? 15000;
   }
 
-  /** 渲染一张卡片，返回 PNG 数据与输出尺寸 */
+  /** 渲染一张在线人数卡片，返回 PNG 数据与输出尺寸 */
   async render(data: CardData): Promise<{ png: Buffer; width: number; height: number }> {
+    return this.renderHtml(
+      buildCardHtml(data, { iconUri: this.iconUri, width: this.width }),
+    );
+  }
+
+  /**
+   * 渲染任意 HTML（通用入口）。
+   *
+   * 抽出来的原因：在线卡片只是「一种」内容，现在群里的指令结果、帮助菜单、
+   * 统计榜、AI 回答都要出图，没必要为每种内容复制一遍窗口/截图/量高逻辑。
+   * 只要 HTML 里有一个 `.card` 元素即可，高度按它自适应。
+   */
+  async renderHtml(html: string): Promise<{ png: Buffer; width: number; height: number }> {
+    // 排到队尾；前一次失败也不能阻断后续渲染
+    const job = () => this.renderWithTimeout(html);
+    const next = this.queue.then(job, job);
+    this.queue = next.catch(() => undefined);
+    return next;
+  }
+
+  /** 真正的渲染 + 超时保护 */
+  private renderWithTimeout(
+    html: string,
+  ): Promise<{ png: Buffer; width: number; height: number }> {
     let timer: NodeJS.Timeout | undefined;
     const timeout = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
@@ -48,7 +80,7 @@ export class CardRenderer {
       }, this.timeoutMs);
     });
     try {
-      return await Promise.race([this.doRender(data), timeout]);
+      return Promise.race([this.doRenderHtml(html), timeout]);
     } finally {
       if (timer) clearTimeout(timer);
     }
@@ -68,10 +100,11 @@ export class CardRenderer {
 
   // ---------------------------------------------------------------- 内部
 
-  private doRender(data: CardData): Promise<{ png: Buffer; width: number; height: number }> {
+  private doRenderHtml(
+    html: string,
+  ): Promise<{ png: Buffer; width: number; height: number }> {
     const run = async (): Promise<{ png: Buffer; width: number; height: number }> => {
       const win = this.ensureWindow();
-      const html = buildCardHtml(data, { iconUri: this.iconUri, width: this.width });
       const url =
         'data:text/html;charset=utf-8;base64,' +
         Buffer.from(html, 'utf8').toString('base64');

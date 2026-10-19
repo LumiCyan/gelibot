@@ -527,6 +527,43 @@ export function ConnectionPage({
       </div>
 
       <div className="card">
+        <h2 className="card-title">软件更新源</h2>
+        <p className="card-desc">
+          差量更新从哪里拉取版本清单与补丁。默认走 GitHub Releases，也可以填一个
+          自建静态目录（需 HTTPS，或本机回环 HTTP）。
+        </p>
+
+        <div className="field">
+          <label>GitHub 仓库（owner/name，留空用默认）</label>
+          <input
+            type="text"
+            value={config.update.repoUrl}
+            onChange={(e) =>
+              patch({ update: { ...config.update, repoUrl: e.target.value } })
+            }
+            placeholder="lumicyan/gelibot"
+          />
+        </div>
+
+        <div className="field">
+          <label>自定义更新源 URL（留空则用 GitHub）</label>
+          <input
+            type="text"
+            className="mono"
+            value={config.update.customUrl}
+            onChange={(e) =>
+              patch({ update: { ...config.update, customUrl: e.target.value } })
+            }
+            placeholder="https://example.com/gelibot-updates"
+          />
+          <p className="hint">
+            该目录下需放置 <span className="mono">release-manifest.json</span>{' '}
+            与对应的差量/完整包。保存后到「软件更新」页点「检查更新」即生效。
+          </p>
+        </div>
+      </div>
+
+      <div className="card">
         <h2 className="card-title">数据与备份</h2>
         <p className="card-desc">
           配置、绑定关系、审计记录与待发验证码都存在下面这个目录里。

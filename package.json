@@ -1,7 +1,7 @@
 {
   "name": "gelibot",
   "productName": "GeLi Bot",
-  "version": "1.17.0",
+  "version": "2.0.0",
   "description": "GeLi Bot — QQ (SnowLuma/OneBot v11) 与 Minecraft 服务器 RCON 桥接的 Windows 桌面端",
   "main": "dist/main/main.js",
   "private": true,
@@ -13,11 +13,13 @@
     "start": "npm run build && electron .",
     "dev": "npm run build && electron . --dev",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.renderer.json --noEmit",
-    "test": "npm run build:main && node scripts/tests/test-bind.cjs && node scripts/tests/test-router.cjs && node scripts/tests/test-verify-flow.cjs && node scripts/tests/test-migrate.cjs && node scripts/tests/test-datadir.cjs && node scripts/tests/test-presence.cjs && node scripts/tests/test-snowluma.cjs && node scripts/tests/test-onebot-errors.cjs",
+    "test": "npm run build:main && node scripts/tests/test-bind.cjs && node scripts/tests/test-router.cjs && node scripts/tests/test-verify-flow.cjs && node scripts/tests/test-migrate.cjs && node scripts/tests/test-datadir.cjs && node scripts/tests/test-presence.cjs && node scripts/tests/test-snowluma.cjs && node scripts/tests/test-onebot-errors.cjs && node scripts/tests/test-bsdiff.mjs && node scripts/tests/test-updater.cjs && node scripts/tests/test-features.cjs && node scripts/tests/test-ai.cjs && node scripts/tests/test-imagereply.cjs && node scripts/tests/test-ownercare.cjs",
     "dist": "node scripts/build-release.mjs",
     "dist:dir": "node scripts/build-release.mjs --dir",
     "fetch:snowluma": "node scripts/fetch-snowluma.mjs",
     "fetch:wincodesign": "node scripts/fetch-wincodesign.mjs",
+    "fetch:nsis": "node scripts/fetch-nsis.mjs",
+    "manifest": "node scripts/build-update-manifest.mjs",
     "icon": "python scripts/make-icon.py && python scripts/make-ui-assets.py"
   },
   "devDependencies": {

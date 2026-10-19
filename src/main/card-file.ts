@@ -14,29 +14,42 @@ import { pathToFileURL } from 'node:url';
  *
  * 文件按内容哈希命名：内容不变就复用同一文件（群里反复查 `/在线`
  * 不会堆出一堆图片），内容变了才产生新文件；顺带清理旧文件。
+ *
+ * @param prefix 文件名前缀，默认 `online`；通用回复卡片用 `reply`，
+ *               这样清理时能按前缀分别统计，互不挤占。
  */
 export function writeCardMessage(
   dir: string,
   png: Buffer,
-  opts: { keep?: number } = {},
+  opts: { keep?: number; prefix?: string } = {},
 ): string {
+  const prefix = (opts.prefix ?? 'online').replace(/[^a-z0-9-]/gi, '') || 'online';
   fs.mkdirSync(dir, { recursive: true });
   const hash = crypto.createHash('sha1').update(png).digest('hex').slice(0, 12);
-  const file = path.join(dir, `online-${hash}.png`);
+  const file = path.join(dir, `${prefix}-${hash}.png`);
   if (!fs.existsSync(file)) {
     fs.writeFileSync(file, png);
-    pruneCards(dir, opts.keep ?? 40, file);
+    pruneCards(dir, opts.keep ?? 40, file, prefix);
   }
   // CQ 码中的路径用标准 file URL（空格等字符会被正确转义）
   return `[CQ:image,file=${pathToFileURL(file).href}]`;
 }
 
 /** 只保留最近 keep 个卡片文件（按 mtime），刚写入的 keepFile 永不删 */
-export function pruneCards(dir: string, keep: number, keepFile?: string): void {
+export function pruneCards(
+  dir: string,
+  keep: number,
+  keepFile?: string,
+  prefix?: string,
+): void {
   try {
+    // 按前缀匹配：不传前缀时同时兼容 online 与 reply
+    const pattern = prefix
+      ? new RegExp(`^${prefix}-[0-9a-f]{12}\\.png$`)
+      : /^(online|reply)-[0-9a-f]{12}\.png$/;
     const files = fs
       .readdirSync(dir)
-      .filter((f) => /^online-[0-9a-f]{12}\.png$/.test(f))
+      .filter((f) => pattern.test(f))
       .map((f) => {
         const full = path.join(dir, f);
         return { full, mtime: fs.statSync(full).mtimeMs };

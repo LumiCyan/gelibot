@@ -46,6 +46,16 @@ import {
   parseImportBundle,
   suggestExportName,
 } from './transfer';
+import { Updater } from './updater';
+import { LogWatcher } from './logwatcher';
+import { ChatBridge } from './chatbridge';
+import { Responder } from './responder';
+import { StatsManager } from './stats';
+import { TaskScheduler } from './task';
+import { AIClient } from './ai';
+import type { AIProvider } from './router';
+import { ImageReplyService, type ReplyKind } from './image-reply';
+import { OwnerCareService, todayDateString } from './owner-care';
 
 let mainWindow: BrowserWindow | null = null;
 let store: Store;
@@ -67,6 +77,24 @@ let presence: PresenceService;
 let cardRenderer: CardRenderer;
 /** 在线展示编排（采集 + 头像 + 渲染 + 落盘） */
 let onlineCard: OnlineCardService;
+/** 自动更新（差量） */
+let updater: Updater;
+/** 服务端日志监听（游戏内事件源） */
+let logWatcher: LogWatcher;
+/** 群服消息双向同步 */
+let chatBridge: ChatBridge;
+/** 关键词/正则自动回复 */
+let responder: Responder;
+/** 玩家统计 */
+let statsManager: StatsManager;
+/** 定时任务调度 */
+let taskScheduler: TaskScheduler;
+/** AI 客户端（OpenAI 兼容协议） */
+let aiClient: AIClient;
+/** 图片回复：把任意功能回复渲染成卡片 */
+let imageReply: ImageReplyService;
+/** 慰问服主：每日播报「离开第 N 天」 */
+let ownerCare: OwnerCareService;
 
 /** 图标读取失败时的 1×1 透明占位，保证卡片头部不出现破图 */
 const TINY_PNG =
@@ -262,13 +290,46 @@ function broadcastSnowLuma(): void {
   }
 }
 
-/** 把路由处理结果发回消息来源 */
-async function dispatchReply(ev: MessageEvent, text: string): Promise<void> {
+function broadcastUpdate(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const wc = mainWindow.webContents;
+  if (!wc || wc.isDestroyed() || wc.isCrashed()) return;
   try {
+    wc.send('update:status', updater.getStatus());
+  } catch {
+    // 渲染进程尚未就绪，忽略本次推送
+  }
+}
+
+/** 去掉消息里的所有 CQ 码（@、图片、表情…），只留纯文本 */
+function stripCQCodes(text: string): string {
+  return String(text ?? '')
+    .replace(/\[CQ:[^\]]*\]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * 把回复发回消息来源。
+ *
+ * 统一走这里的好处：图片回复的判定只在一处，所有功能（指令、绑定、
+ * 帮助、AI、统计…）自动获得出图能力，新加功能也不用再关心这件事。
+ */
+async function dispatchReply(
+  ev: MessageEvent,
+  text: string,
+  kind: ReplyKind = 'command',
+  title?: string,
+): Promise<void> {
+  try {
+    // 先尝试出图；返回 null 表示不该出图或渲染失败 → 发文字
+    const img = await imageReply?.maybeRender(text, { kind, title });
+    const payload = img ?? text;
+
     if (ev.message_type === 'group') {
-      await onebot.sendGroupMessage(ev.group_id, text);
+      await onebot.sendGroupMessage(ev.group_id, payload);
     } else {
-      await onebot.sendPrivateMessage(ev.user_id, text);
+      await onebot.sendPrivateMessage(ev.user_id, payload);
     }
   } catch (err) {
     console.error('[dispatch] 回复失败:', err);
@@ -282,13 +343,105 @@ function wireEvents(): void {
 
   onebot.on('message', (ev: MessageEvent) => {
     void (async () => {
+      const raw = (ev.raw_message ?? '').trim();
+      const qq = String(ev.user_id);
+      const sender = ev.sender as { card?: string; nickname?: string } | undefined;
+      const nickname = (sender?.card || sender?.nickname) ?? qq;
+      const groupId = ev.message_type === 'group' ? String(ev.group_id) : undefined;
+
+      // 1) 指令路由（以 / 开头）
+      if (raw.startsWith('/')) {
+        try {
+          const result = await router.handle(ev);
+          if (result.handled && result.reply) {
+            await dispatchReply(ev, result.reply);
+          }
+        } catch (err) {
+          console.error('[router] 处理消息出错:', err);
+        }
+        return;
+      }
+
+      // 2) @机器人 → AI 问答
+      //    @ 消息不参与群服同步：那是在跟机器人说话，不是群聊内容
+      const selfId = onebot.getState().selfId;
+      const atMe = Boolean(selfId) && raw.includes(`[CQ:at,qq=${selfId}]`);
+      if (atMe) {
+        const ai = store.getConfig().ai;
+        const triggerOk = ai.trigger === 'mention' || ai.trigger === 'both';
+        if (ai.enabled && triggerOk && aiClient) {
+          const question = stripCQCodes(raw).replace(/@\S+\s*/g, '').trim();
+          if (question) {
+            try {
+              const answer = await aiClient.chat(
+                question,
+                groupId ?? `private:${qq}`,
+                qq,
+                `当前时间：${new Date().toLocaleString('zh-CN')}。` +
+                  '如果用户询问在线人数、TPS 等实时服务器数据，请提示他发送「/在线」或「/tps」查询，不要猜测数字。',
+              );
+              const text = answer.ok ? answer.text : `[AI] ${answer.error}`;
+              await dispatchReply(
+                ev,
+                ai.mentionOnReply ? `[CQ:at,qq=${qq}] ${text}` : text,
+              );
+            } catch (err) {
+              console.error('[ai] @回答失败:', err);
+            }
+            return;
+          }
+        }
+        // 只 @ 了机器人却没说话 → 给个用法提示，别让它装死
+        await dispatchReply(ev, '在的。有什么想问的？直接把问题发在 @我 后面即可');
+        return;
+      }
+
+      // 3) 群 → 游戏
       try {
-        const result = await router.handle(ev);
-        if (result.handled && result.reply) {
-          await dispatchReply(ev, result.reply);
+        await chatBridge.handleChatMessage({ groupId, qq, nickname, message: raw });
+      } catch (err) {
+        console.error('[chatbridge] 转发到游戏失败:', err);
+      }
+
+      // 4) 自动回复；没命中时按配置让 AI 兜底
+      const cfg = store.getConfig();
+      try {
+        const hit = responder.evaluate(raw, {
+          qq,
+          groupId,
+          nickname,
+          isAdmin: cfg.whitelist.admins.includes(qq),
+        });
+        if (hit) {
+          await dispatchReply(ev, hit.reply);
+          // 需要同步到游戏内的规则（如「有人问在线」），仍走模板化路径
+          if (hit.rule.toGame) {
+            await rcon.execute(
+              `tellraw @a ${JSON.stringify({ text: `[${hit.rule.name}] ${hit.reply}` })}`,
+            );
+          }
+          return;
+        }
+
+        // AI 兜底：只对「群内文字消息」生效，且必须有内容
+        if (cfg.ai.enabled && cfg.ai.fallbackToAI && aiClient && raw.length >= 2) {
+          const answer = await aiClient.chat(
+            raw,
+            groupId ?? `private:${qq}`,
+            qq,
+            `当前时间：${new Date().toLocaleString('zh-CN')}。` +
+              '这是一个 Minecraft 服务器玩家群。如果不确定，简短回答或说不知道，不要编造。',
+          );
+          // 兜底失败不打扰群里，只在控制台留痕
+          if (answer.ok) {
+            await dispatchReply(
+              ev,
+              cfg.ai.mentionOnReply ? `[CQ:at,qq=${qq}] ${answer.text}` : answer.text,
+            );
+          }
         }
       } catch (err) {
-        console.error('[router] 处理消息出错:', err);
+        console.error('[responder] 自动回复失败:', err);
       }
     })();
   });
@@ -312,6 +465,37 @@ function wireEvents(): void {
       }
     })();
   });
+
+  // 游戏内事件：统计 + 群服同步 + 事件通知
+  logWatcher.onEvent((ev) => {
+    void (async () => {
+      try {
+        // 统计
+        if (ev.kind === 'join') statsManager.onJoin(ev.player);
+        else if (ev.kind === 'leave') statsManager.onLeave(ev.player);
+        else if (ev.kind === 'chat') statsManager.onChat(ev.player);
+
+        // 群服同步（游戏 → 群）
+        if (ev.kind === 'chat') {
+          await chatBridge.handleGameChat(ev);
+        }
+        // 事件通知（进/退/死/成就/启动）
+        await chatBridge.handleGameEvent(ev);
+      } catch (err) {
+        console.error('[game-event] 处理失败:', err);
+      }
+    })();
+  });
+
+  // 统计定期落盘（有变化才写，避免无谓 IO）
+  setInterval(() => {
+    if (!statsManager?.consumeDirty()) return;
+    try {
+      store.saveStats(statsManager.snapshot());
+    } catch (err) {
+      console.error('[stats] 落盘失败:', err);
+    }
+  }, 30_000).unref?.();
 }
 
 function createWindow(): void {
@@ -341,11 +525,70 @@ function createWindow(): void {
   });
 }
 
+/** AI 提供者（只构造一次，内部持有会话上下文与配额账本） */
+let aiProviderInstance: AIProvider | null = null;
+
+/**
+ * 组装 AI 提供者。
+ *
+ * 这里刻意**不把 RCON 的实时数据喂给模型**：
+ * - 模型看到「在线 3 人」这类数字会顺着编，答错了用户以为服务器坏了
+ * - 更重要的是一致性：AI 只产出文本，从不触达服务器。
+ *   需要实时数据的场景让用户发 `/在线`、`/tps`，走既有的模板化通道。
+ */
+function ensureAIProvider(): AIProvider {
+  if (aiProviderInstance) return aiProviderInstance;
+
+  aiProviderInstance = {
+    ask: async (question, ctx) => {
+      const sessionKey = ctx.groupId ?? `private:${ctx.qq}`;
+      const extra =
+        `当前时间：${new Date().toLocaleString('zh-CN')}。` +
+        '如果用户询问在线人数、TPS、MSPT 等实时服务器数据，请提示他发送「/在线」或「/tps」自己查，' +
+        '不要猜测具体数字。';
+      const res = await aiClient.chat(question, sessionKey, ctx.qq, extra);
+      return res.ok ? res.text : `[AI] ${res.error}`;
+    },
+
+    profile: async (playerId, qq) => {
+      const st = statsManager.get(playerId);
+      if (!st) {
+        return (
+          `没有找到 ${playerId} 的统计数据。\n` +
+          '需要先在「玩家统计」里启用统计，并让该玩家在服务器里活动过（进服/发言会被日志监听记录）。'
+        );
+      }
+      const bind = bindingManager.findByPlayer(playerId);
+      const lines = [
+        `玩家 ID：${st.playerId}`,
+        `累计在线：${Math.floor(st.onlineSeconds / 60)} 分钟`,
+        `发言：${st.chatCount} 条`,
+        `使用指令：${st.commandCount} 次`,
+        `进服次数：${st.joinCount} 次`,
+        `首次出现：${st.firstSeen.slice(0, 10)}`,
+        `最后出现：${st.lastSeen.slice(0, 16).replace('T', ' ')}`,
+        bind ? `已绑定 QQ：${bind.qq.slice(0, 3)}***（其余位已打码）` : '尚未绑定 QQ',
+      ];
+      const extra =
+        `下面是玩家 ${playerId} 的真实统计数据。请据此写一段 80 字以内的中文画像，` +
+        '语气轻松、只描述事实，绝对不要编造数据里没有的信息：\n' +
+        lines.join('\n');
+      const res = await aiClient.chat(
+        '请根据以上数据生成一段玩家画像',
+        `profile:${playerId}`,
+        qq,
+        extra,
+      );
+      return res.ok ? res.text : `[AI] ${res.error}`;
+    },
+  };
+  return aiProviderInstance;
+}
+
 /**
  * 按配置启停验证服连接。
  * 未启用时主动断开，免得它在后台反复重连、把「连接异常」一直挂在状态栏上。
- */
-function applyVerifyServerConfig(next: AppConfig): void {
+ */function applyVerifyServerConfig(next: AppConfig): void {
   if (!rconVerify) return;
   rconVerify.updateConfig(next.verifyServer.rcon);
   if (next.verifyServer.enabled) {
@@ -370,6 +613,17 @@ function applyConfig(next: AppConfig): void {
     customDir: next.snowluma.dir,
     fallbackWebUrl: next.snowluma.webUrl,
   });
+  updater?.updateChannel(next.update);
+  logWatcher?.updateConfig(next.logWatcher);
+  chatBridge?.updateConfig(next.chatBridge, next.notify);
+  responder?.updateConfig(next.responder);
+  statsManager?.updateConfig(next.stats);
+  taskScheduler?.updateConfig(next.tasks);
+  aiClient?.updateConfig(next.ai);
+  // AI 开关变化时同步注入/撤销提供者
+  router.setAIProvider(next.ai.enabled ? ensureAIProvider() : null);
+  // 慰问服主：配置变更后按需启停
+  ownerCare?.updateConfig(next.ownerCare);
 }
 
 /** 收集当前数据目录的信息，供界面展示 */
@@ -560,6 +814,123 @@ function registerPresenceIpc(): void {
       }
     },
   );
+}
+
+/** 自动更新相关 IPC */
+function registerUpdateIpc(): void {
+  ipcMain.handle('update:status', () => updater.getStatus());
+
+  ipcMain.handle('update:check', async () => updater.check());
+
+  ipcMain.handle('update:download', async () => updater.downloadUpdate());
+
+  ipcMain.handle('update:apply', async () => {
+    const res = await updater.apply();
+    if (res.ok) {
+      // 替换完成，稍后重启（给渲染进程一点时间展示「已更新」）
+      setTimeout(() => updater.restart(), 800);
+    }
+    return res;
+  });
+}
+
+/**
+ * 新增功能域（日志监听 / 统计 / 定时任务 / 自动回复）的 IPC。
+ * 与既有 IPC 分开注册，便于后续继续加功能域而不弄乱主函数。
+ */
+function registerFeatureIpc(): void {
+  ipcMain.handle('logwatch:status', () => logWatcher.getStatus());
+
+  // 探测某个服务端目录下是否有 logs/latest.log，供界面「自动探测」按钮用
+  ipcMain.handle('logwatch:probe', (_e, serverDir: string) => {
+    const p = path.resolve(path.join(String(serverDir ?? ''), 'logs', 'latest.log'));
+    return { path: p, exists: fs.existsSync(p) };
+  });
+
+  ipcMain.handle('stats:list', () => statsManager.list());
+
+  ipcMain.handle(
+    'stats:top',
+    (_e, by: 'onlineSeconds' | 'chatCount' | 'commandCount' | 'joinCount', limit?: number) =>
+      statsManager.top(by, limit ?? 10),
+  );
+
+  ipcMain.handle('stats:clear', () => {
+    statsManager.clear();
+    try {
+      store.saveStats([]);
+    } catch (err) {
+      console.error('[stats] 清空落盘失败:', err);
+    }
+  });
+
+  ipcMain.handle('task:history', () => taskScheduler.getHistory());
+  ipcMain.handle('task:runNow', (_e, id: string) => taskScheduler.runNow(id));
+
+  // 试跑一条自动回复：不真的发送，只回显会命中哪条规则、回什么
+  ipcMain.handle('responder:test', (_e, text: string) => {
+    const hit = responder.evaluate(String(text ?? ''), {
+      qq: 'test',
+      nickname: '测试用户',
+      isAdmin: true,
+    });
+    return hit
+      ? { hit: true, ruleName: hit.rule.name, reply: hit.reply }
+      : { hit: false };
+  });
+
+  // ---------- AI ----------
+
+  ipcMain.handle('ai:status', () => aiClient.getStatus());
+
+  // 界面里的「测试连接」：发一条最小请求，验证 baseUrl / key / model 三件套
+  ipcMain.handle('ai:test', async () => {
+    try {
+      const res = await aiClient.chat(
+        '请只回复两个字：可用',
+        'ui:test',
+        '__ui__',
+        '这是一次连通性测试，请只回复「可用」两个字。',
+      );
+      return res.ok ? { ok: true, reply: res.text } : { ok: false, error: res.error };
+    } catch (err) {
+      return { ok: false, error: (err as Error).message };
+    }
+  });
+
+  // 界面里直接问一句（不经过 QQ），方便调人设
+  ipcMain.handle('ai:ask', async (_e, question: string) => {
+    const q = String(question ?? '').trim();
+    if (!q) return { ok: false, error: '问题为空' };
+    const res = await aiClient.chat(q, 'ui:chat', '__ui__');
+    return res.ok ? { ok: true, reply: res.text } : { ok: false, error: res.error };
+  });
+
+  ipcMain.handle('ai:clearContext', () => {
+    aiClient.clearContext();
+  });
+
+  // ---------- 图片回复 ----------
+
+  ipcMain.handle('imageReply:preview', (_e, text: string) =>
+    imageReply.preview(String(text ?? '')),
+  );
+
+  // ---------- 慰问服主 ----------
+
+  ipcMain.handle('ownerCare:status', () => ownerCare.getStatus());
+
+  ipcMain.handle('ownerCare:sendNow', () => ownerCare.sendNow());
+
+  // 「服主回来了」→ 把起始日重置为今天，天数重新从第 1 天开始
+  ipcMain.handle('ownerCare:resetStart', () => {
+    const next = {
+      ...store.getConfig(),
+      ownerCare: { ...store.getConfig().ownerCare, startDate: todayDateString() },
+    };
+    applyConfig(next);
+    return ownerCare.getStatus();
+  });
 }
 
 function registerIpc(): void {
@@ -761,6 +1132,17 @@ app.whenReady().then(async () => {
   });
   router.setOnlineCardProvider(onlineCard);
 
+  // 图片回复：把任意功能回复渲染成卡片。
+  // 与在线卡片共用同一个渲染器（内部已串行化）和同一份图标资源，
+  // 但文件名前缀不同（reply- vs online-），清理时互不挤占。
+  imageReply = new ImageReplyService({
+    renderer: cardRenderer,
+    iconUri: loadCardIconUri(),
+    cardDir: path.join(getDataDir(), 'cards'),
+    getConfig: () => store.getConfig(),
+    log: (m) => console.warn('[image-reply]', m),
+  });
+
   snowLuma = new SnowLumaManager({
     customDir: config.snowluma.dir,
     bundledDir: getBundledSnowLumaDir(),
@@ -775,10 +1157,86 @@ app.whenReady().then(async () => {
     void shell.openExternal(url);
   });
 
+  // 自动更新：按配置创建，状态变化推给渲染进程
+  updater = new Updater(config.update);
+  updater.onStatus(() => broadcastUpdate());
+
+  // ---- 新增功能域：日志监听 / 群服同步 / 自动回复 / 统计 / 定时任务 ----
+
+  // 日志监听是游戏内事件的唯一来源，其它模块都挂在它上面
+  logWatcher = new LogWatcher(config.logWatcher);
+
+  chatBridge = new ChatBridge(config.chatBridge, config.notify, {
+    sendToGroups: async (groups, text, kind) => {
+      for (const g of groups) {
+        try {
+          // 聊天同步（kind=chat）永远不出图，事件通知按配置决定
+          const img =
+            kind === 'notice'
+              ? await imageReply?.maybeRender(text, { kind: 'notice', title: '服务器动态' })
+              : null;
+          await onebot.sendGroupMessage(g, img ?? text);
+        } catch (err) {
+          // 单个群发失败不影响其它群
+          console.error(`[chatbridge] 发群 ${g} 失败:`, err);
+        }
+      }
+    },
+    sendToGame: async (text) => {
+      // 用 tellraw 而不是 say：say 会把内容当成控制台发言，tellraw 才能保留格式且不触发命令解析
+      const res = await rcon.execute(`tellraw @a ${JSON.stringify({ text })}`);
+      if (!res.success) throw new Error(res.error ?? 'RCON 执行失败');
+    },
+  });
+
+  responder = new Responder(config.responder);
+  statsManager = new StatsManager(config.stats, store.loadStats());
+
+  // 慰问服主：每天定点播报一次「离开第 N 天」。
+  // 文案是短句，不做图片渲染（出图反而更费眼）。
+  ownerCare = new OwnerCareService(config.ownerCare, {
+    sendToGroups: async (groups, text) => {
+      for (const g of groups) {
+        try {
+          await onebot.sendGroupMessage(g, text);
+        } catch (err) {
+          console.error(`[owner-care] 发群 ${g} 失败:`, err);
+        }
+      }
+    },
+    log: (m) => console.warn('[owner-care]', m),
+  });
+  if (config.ownerCare.enabled) ownerCare.start();
+
+  taskScheduler = new TaskScheduler(config.tasks, {
+    run: async (task) => {
+      if (task.action.type === 'rcon') {
+        const res = await rcon.execute(task.action.command);
+        if (!res.success) throw new Error(res.error ?? 'RCON 执行失败');
+        return;
+      }
+      if (task.action.targetType === 'group') {
+        await onebot.sendGroupMessage(task.action.targetId, task.action.text);
+      } else {
+        await onebot.sendPrivateMessage(task.action.targetId, task.action.text);
+      }
+    },
+  });
+
+  // 日志监听与定时任务按配置启停
+  if (config.logWatcher.enabled) logWatcher.start();
+  if (config.tasks.enabled) taskScheduler.start();
+
+  // AI：构造提供者并注入路由（关闭时注入 null，/问 会提示未开启）
+  aiClient = new AIClient(config.ai);
+  router.setAIProvider(config.ai.enabled ? ensureAIProvider() : null);
+
   wireEvents();
   registerIpc();
   registerDataIpc();
   registerPresenceIpc();
+  registerUpdateIpc();
+  registerFeatureIpc();
   createWindow();
 
   // 等渲染进程就绪后再发起连接，避免状态推送早于页面加载
@@ -815,6 +1273,10 @@ app.on('before-quit', (e) => {
   rconVerify?.destroy();
   onebot?.destroy();
   cardRenderer?.destroy();
+  logWatcher?.stop();
+  taskScheduler?.stop();
+  chatBridge?.dispose();
+  ownerCare?.stop();
   if (quitting) return;
 
   const shouldStop = (() => {

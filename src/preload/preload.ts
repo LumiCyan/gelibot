@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { AppConfig, BridgeApi, RuntimeStatus, SnowLumaStatus } from '../shared/types';
+import type { AppConfig, BridgeApi, RuntimeStatus, SnowLumaStatus, UpdateStatus } from '../shared/types';
 
 /**
  * 通过 contextBridge 暴露受限的 IPC 接口。
@@ -73,6 +73,51 @@ const api: BridgeApi = {
   // ---------- 在线展示 ----------
 
   previewPresence: (presence) => ipcRenderer.invoke('presence:preview', presence),
+
+  // ---------- 自动更新 ----------
+
+  getUpdateStatus: () => ipcRenderer.invoke('update:status'),
+
+  onUpdateStatus: (cb) => {
+    const listener = (_e: unknown, status: UpdateStatus) => cb(status);
+    ipcRenderer.on('update:status', listener);
+    return () => ipcRenderer.removeListener('update:status', listener);
+  },
+
+  checkUpdate: () => ipcRenderer.invoke('update:check'),
+  downloadUpdate: () => ipcRenderer.invoke('update:download'),
+  applyUpdate: () => ipcRenderer.invoke('update:apply'),
+
+  // ---------- 日志监听 / 统计 / 定时任务 ----------
+
+  getLogWatcherStatus: () => ipcRenderer.invoke('logwatch:status'),
+  probeLogPath: (serverDir: string) => ipcRenderer.invoke('logwatch:probe', serverDir),
+
+  getStats: () => ipcRenderer.invoke('stats:list'),
+  getStatsTop: (by, limit?: number) => ipcRenderer.invoke('stats:top', by, limit),
+  clearStats: () => ipcRenderer.invoke('stats:clear'),
+
+  getTaskHistory: () => ipcRenderer.invoke('task:history'),
+  runTaskNow: (taskId: string) => ipcRenderer.invoke('task:runNow', taskId),
+
+  testResponder: (text: string) => ipcRenderer.invoke('responder:test', text),
+
+  // ---------- AI ----------
+
+  getAIStatus: () => ipcRenderer.invoke('ai:status'),
+  testAI: () => ipcRenderer.invoke('ai:test'),
+  askAI: (question: string) => ipcRenderer.invoke('ai:ask', question),
+  clearAIContext: () => ipcRenderer.invoke('ai:clearContext'),
+
+  // ---------- 图片回复 ----------
+
+  previewImageReply: (text: string) => ipcRenderer.invoke('imageReply:preview', text),
+
+  // ---------- 慰问服主 ----------
+
+  getOwnerCareStatus: () => ipcRenderer.invoke('ownerCare:status'),
+  sendOwnerCareNow: () => ipcRenderer.invoke('ownerCare:sendNow'),
+  resetOwnerCareStart: () => ipcRenderer.invoke('ownerCare:resetStart'),
 };
 
 contextBridge.exposeInMainWorld('bridge', api);
