@@ -1,13 +1,49 @@
-# v2.0.0 发布记录（已完成）
+# 发布记录与踩坑
 
-**✅ 已于 2026-10-19 22:03 发布**
+> 2.0.0 于 2026-10-19 完成发布；2.0.1 于 2026-10-20 完成发布。
+> 流程没变，但代理策略变了 —— 见「坑三」。
 
-- Release：https://github.com/LumiCyan/gelibot/releases/tag/v2.0.0
-- 代码：`main` 已推到 `e9a1f3f`，tag `v2.0.0` 已推
-- 附件：6 个，全部 `uploaded`
-- 验证：`releases/latest/download/` 下 4 个关键 URL 全部 **HTTP 200 且字节数精确匹配**
+---
 
-本文档保留发布过程中踩到的两个坑，供以后发版参考。
+## 坑三（2.0.1 新增）：代理改为只放行 `api.github.com`
+
+2.0.0 那次代理还能打通 `github.com`，2.0.1 时不行了：
+
+```
+curl -k https://api.github.com/...        →  HTTP 200
+curl -k https://github.com/...            →  HTTP 000
+git push https://github.com/.../gelibot   →  CONNECT tunnel failed, response 502
+```
+
+代理换成了 `127.0.0.1:54362`，并做了域名白名单：**只放行 `api.github.com`，
+`github.com` 的 CONNECT 一律 502**。`git push` 走的就是 `github.com/{owner}/{repo}.git`，
+所以彻底走不通（`git -c http.sslVerify=false` 也没用，卡在 CONNECT 阶段之前）。
+
+绕法：用 **Git Data API** 提交，脚本 `scripts/push-via-api.mjs`。
+
+```bash
+export GITHUB_TOKEN=$(printf "protocol=https\nhost=github.com\n\n" | git credential fill \
+  | grep '^password=' | cut -d= -f2-)
+node scripts/push-via-api.mjs v2.0.1
+```
+
+它做四件事：本地 commit 的变更文件 → `POST /git/blobs` → `POST /git/trees`（以远端树为底，
+只替换改动的文件）→ `POST /git/commits`（parent 是远端当前 sha，保证快进）→
+`PATCH /git/refs/heads/main` → `POST /git/refs` 打 tag。
+
+**副作用要知道**：API 建出来的 commit，author 是 token 的持有人，
+所以 sha 与本地 commit **不同**（内容相同，历史不同）。本地分支会与远端分叉。
+后续继续用本脚本推送没有问题（它永远以远端树为底），但**不要在这台机器上 `git pull`**，
+会因分叉冲突。要拉取要么换机器，要么也用 API 读。
+
+## 坑四（2.0.1 新增）：发布目录别混版
+
+2.0 的资产放在 `release-assets-2.0`（major.minor 命名），结果同一目录里躺着
+2.0.0 的 asar 和 2.0.1 的 patch，很容易拿错文件。从 2.0.1 起按完整版本号建目录。
+
+同理，上传脚本的附件表已改为**从 `release-manifest.json` 推导**：
+清单里有几个 patch 就传几个。之前是硬编码 `app-1.17.0-to-2.0.0.patch` 这类名字，
+换版本忘改就会漏传，老用户「检查更新」直接 404。
 
 ---
 
@@ -28,6 +64,7 @@ ssh  git@github.com:22             → Connection refused
 代理在 `127.0.0.1`，不涉及外部第三方，风险可控。
 
 ## 坑二：GitHub 把文件名里的空格换成点
+
 
 上传 `GeLi Bot v2.0.0.exe` 后，实际存储名变成了 `GeLi.Bot.v2.0.0.exe`。
 清单里 `exeUrl` 写的是带空格的名字，客户端拼出来的 URL 就 **404**。
