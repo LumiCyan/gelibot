@@ -154,18 +154,14 @@ function fmtSize(n) {
 // ---------------------------------------------------------------- 预检
 console.log(`发布 ${TAG} → ${OWNER}/${REPO}\n`);
 
-const manifest = JSON.parse(fs.readFileSync(path.join(ASSET_DIR, 'release-manifest.json'), 'utf8'));
-if (manifest.version !== VERSION) {
-  console.error(`✘ 清单版本 ${manifest.version} ≠ ${VERSION}`);
-  process.exit(1);
-}
+// 版本一致性已在上面（构造 ASSETS 时）校验过，这里只查文件是否都在
 for (const a of ASSETS) {
   if (!fs.existsSync(a.path)) {
     console.error(`✘ 缺少文件：${a.path}`);
     process.exit(1);
   }
 }
-console.log(`✔ 6 个附件就绪，release notes ${fmtSize(fs.statSync(NOTES).size)}`);
+console.log(`✔ ${ASSETS.length} 个附件就绪，release notes ${fmtSize(fs.statSync(NOTES).size)}`);
 
 // ---------------------------------------------------------------- 1. 创建 Release
 const notesBody = fs.readFileSync(NOTES, 'utf8');
