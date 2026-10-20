@@ -86,10 +86,11 @@
 | AI | `ai.ts` + `ai-util.ts` | OpenAI 兼容五家预设、上下文、配额、输出清洗 |
 | 图片回复 | `card-generic.ts` + `image-reply*.ts` | 任意文本→卡片、自动排版、串行渲染、失败回退 |
 | 慰问服主 | `owner-care.ts` | 每日播报第 N 天、`/慰问`、一键重置 |
+| 界面动效 | `App.tsx` + `styles.css` | 方向感知切页、内容错落进场、导航滑块、提示条生命周期、减动效降级 |
 | 差量更新 | `updater.ts` + `bsdiff.mjs` | bsdiff 补丁、sha256 二次校验、镜像回退 |
 | 安装程序 | `electron-builder.config.js` | NSIS 中文向导 + portable 双形态 |
 
-测试：**810 项**（含 12 套专项用例）。
+测试：**824 项**（含 13 套专项用例）+ **21 项界面动效视觉验证**（`npm run ui:shot`）。
 
 ---
 

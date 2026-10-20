@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { AppConfig, RuntimeStatus, SnowLumaStatus } from '../shared/types';
 import { ConnectionPage } from './pages/ConnectionPage';
 import { WhitelistPage } from './pages/WhitelistPage';
@@ -61,6 +61,9 @@ export interface PageProps {
   patch: (partial: Partial<AppConfig>) => void;
 }
 
+/** 页面在导航里的先后顺序，用来判断切换方向 */
+const NAV_INDEX = new Map<PageKey, number>(NAV.map((n, i) => [n.key, i]));
+
 /** SnowLuma 状态文案 */
 function snowLumaText(s: SnowLumaStatus | null): string {
   if (!s) return '—';
@@ -93,6 +96,19 @@ export function App() {
   const [snowluma, setSnowluma] = useState<SnowLumaStatus | null>(null);
   const [dirty, setDirty] = useState(false);
   const [toast, setToast] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
+  /**
+   * 切页方向：1 = 沿导航往下走，-1 = 往上走。
+   * 内容进场时据此决定从下浮起还是从上落下，让「翻页」有前后之分。
+   */
+  const [dir, setDir] = useState<1 | -1>(1);
+  /** 配置是否已就绪。未就绪时整页只渲染「正在加载配置…」，侧边栏还没进 DOM */
+  const hasConfig = config !== null;
+
+  const contentRef = useRef<HTMLElement | null>(null);
+  const navRef = useRef<HTMLElement | null>(null);
+  const navBarRef = useRef<HTMLSpanElement | null>(null);
+  /** 滑块首帧不做过渡，否则会从顶部滑下来 */
+  const navBarSettled = useRef(false);
 
   useEffect(() => {
     void window.bridge.getConfig().then(setConfig);
@@ -105,6 +121,50 @@ export function App() {
       offSnow();
     };
   }, []);
+
+  /** 切页：先记下方向，再换页。方向交给 CSS 决定内容从哪一侧浮起 */
+  const goto = useCallback(
+    (next: PageKey) => {
+      if (next === page) return;
+      setDir((NAV_INDEX.get(next) ?? 0) > (NAV_INDEX.get(page) ?? 0) ? 1 : -1);
+      setPage(next);
+    },
+    [page],
+  );
+
+  // 切页后回到顶部，否则新区块会停在上一页的滚动位置
+  useEffect(() => {
+    contentRef.current?.scrollTo({ top: 0 });
+  }, [page]);
+
+  // 侧边栏高亮滑块：量出当前项的位置，让它平移到新项身上
+  useLayoutEffect(() => {
+    const nav = navRef.current;
+    const bar = navBarRef.current;
+    if (!nav || !bar) return;
+    const active = nav.querySelector<HTMLElement>('.nav-item.active');
+    if (!active) return;
+
+    // 首帧直接落位，不播「从顶部滑下来」那一段
+    if (!navBarSettled.current) bar.style.transition = 'none';
+
+    const navRect = nav.getBoundingClientRect();
+    const rect = active.getBoundingClientRect();
+    bar.style.height = `${Math.round(rect.height)}px`;
+    // 加 scrollTop 换成内容坐标，滑块随侧边栏一起滚动
+    bar.style.transform = `translateY(${Math.round(rect.top - navRect.top + nav.scrollTop)}px)`;
+    bar.style.opacity = '1';
+
+    if (!navBarSettled.current) {
+      navBarSettled.current = true;
+      requestAnimationFrame(() => {
+        bar.style.transition = '';
+      });
+    }
+    // 依赖里必须带上「配置到没到」：
+    // 配置未就绪时整页只渲染一行「正在加载配置…」，侧边栏还不存在，
+    // 那次测量拿不到节点；等配置到了要再量一次，否则滑块一直不出现。
+  }, [page, hasConfig]);
 
   const showToast = useCallback((type: 'ok' | 'err', text: string) => {
     setToast({ type, text });
@@ -210,7 +270,9 @@ export function App() {
       </div>
 
       <div className="body">
-        <nav className="sidebar">
+        <nav className="sidebar" ref={navRef}>
+          {/* 跟随当前项滑动的高亮块（位置由 JS 量出来写进 transform） */}
+          <span className="nav-indicator" ref={navBarRef} aria-hidden="true" />
           {NAV.map((item, i) => {
             // 分组标题：与上一条的 group 不同时插一行小标题
             const prev = i > 0 ? NAV[i - 1].group : undefined;
@@ -220,7 +282,7 @@ export function App() {
                 {showGroup && <div className="nav-group">{item.group}</div>}
                 <button
                   className={`nav-item ${page === item.key ? 'active' : ''}`}
-                  onClick={() => setPage(item.key)}
+                  onClick={() => goto(item.key)}
                 >
                   {item.label}
                 </button>
@@ -229,34 +291,43 @@ export function App() {
           })}
         </nav>
 
-        <main className="content">
+        <main className="content" ref={contentRef}>
           {toast && (
-            <div className={`banner ${toast.type === 'ok' ? 'ok' : 'err'}`}>
+            <div className={`banner toast ${toast.type === 'ok' ? 'ok' : 'err'}`}>
               {toast.text}
             </div>
           )}
 
-          {page === 'connection' && (
-            <ConnectionPage
-              {...pageProps}
-              snowluma={snowluma}
-              onReset={reset}
-              onReload={reload}
-            />
-          )}
-          {page === 'whitelist' && <WhitelistPage {...pageProps} />}
-          {page === 'commands' && <CommandsPage {...pageProps} />}
-          {page === 'bindings' && <BindingsPage {...pageProps} />}
-          {page === 'chatbridge' && <ChatBridgePage {...pageProps} />}
-          {page === 'responder' && <ResponderPage {...pageProps} />}
-          {page === 'ai' && <AIPage {...pageProps} />}
-          {page === 'imagereply' && <ImageReplyPage {...pageProps} />}
-          {page === 'stats' && <StatsPage {...pageProps} />}
-          {page === 'tasks' && <TaskPage {...pageProps} />}
-          {page === 'ownercare' && <OwnerCarePage {...pageProps} />}
-          {page === 'console' && <ConsolePage />}
-          {page === 'audit' && <AuditPage />}
-          {page === 'update' && <UpdatePage />}
+          {/*
+            key={page} 让每次切页都重建这一层，进场动画才会重播。
+            enter-up / enter-down 只改变位移方向，其余交给 CSS。
+          */}
+          <div
+            className={`page-stage ${dir > 0 ? 'enter-up' : 'enter-down'}`}
+            key={page}
+          >
+            {page === 'connection' && (
+              <ConnectionPage
+                {...pageProps}
+                snowluma={snowluma}
+                onReset={reset}
+                onReload={reload}
+              />
+            )}
+            {page === 'whitelist' && <WhitelistPage {...pageProps} />}
+            {page === 'commands' && <CommandsPage {...pageProps} />}
+            {page === 'bindings' && <BindingsPage {...pageProps} />}
+            {page === 'chatbridge' && <ChatBridgePage {...pageProps} />}
+            {page === 'responder' && <ResponderPage {...pageProps} />}
+            {page === 'ai' && <AIPage {...pageProps} />}
+            {page === 'imagereply' && <ImageReplyPage {...pageProps} />}
+            {page === 'stats' && <StatsPage {...pageProps} />}
+            {page === 'tasks' && <TaskPage {...pageProps} />}
+            {page === 'ownercare' && <OwnerCarePage {...pageProps} />}
+            {page === 'console' && <ConsolePage />}
+            {page === 'audit' && <AuditPage />}
+            {page === 'update' && <UpdatePage />}
+          </div>
         </main>
       </div>
     </>

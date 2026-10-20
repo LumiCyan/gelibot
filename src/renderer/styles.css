@@ -124,8 +124,22 @@ body {
 }
 
 .dot.connected { background: var(--green); }
-.dot.connecting { background: var(--amber); }
+.dot.connecting {
+  background: var(--amber);
+  /* 呼吸：正在连的时候能看出它还活着，而不是像卡死了 */
+  animation: dotPulse 1.3s ease-in-out infinite;
+}
 .dot.error { background: var(--red); }
+
+@keyframes dotPulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
 
 .status-label {
   color: var(--text-muted);
@@ -143,12 +157,35 @@ body {
 }
 
 .sidebar {
+  position: relative;
   width: 186px;
   background: var(--surface);
   border-right: 1px solid var(--border);
   padding: 12px 10px;
   flex-shrink: 0;
   overflow-y: auto;
+}
+
+/*
+ * 跟随当前项滑动的高亮块。
+ * 位置由 App.tsx 量出来写在 transform 上，这里只管样子和过渡——
+ * 切页时它平滑滑过去，比背景色硬切更像「导航」而不是「列表」。
+ */
+.nav-indicator {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  top: 0;
+  height: 34px;
+  border-radius: var(--radius);
+  background: var(--primary-soft);
+  box-shadow: inset 2px 0 0 var(--primary);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    transform 0.22s cubic-bezier(0.22, 0.85, 0.32, 1),
+    height 0.22s cubic-bezier(0.22, 0.85, 0.32, 1),
+    opacity 0.18s ease;
 }
 
 /* 侧边栏分组小标题（导航按使用路径分组） */
@@ -168,6 +205,8 @@ body {
 }
 
 .nav-item {
+  position: relative;
+  z-index: 1;
   display: block;
   width: 100%;
   text-align: left;
@@ -180,23 +219,73 @@ body {
   color: var(--text);
   cursor: pointer;
   font-family: inherit;
+  transition:
+    background-color 0.16s ease,
+    color 0.16s ease;
 }
 
 .nav-item:hover {
   background: #f1f5f9;
 }
 
+/* 背景与左侧色条由 .nav-indicator 提供，这里只负责文字 */
 .nav-item.active {
-  background: var(--primary-soft);
+  background: transparent;
   color: var(--primary);
   font-weight: 500;
-  box-shadow: inset 2px 0 0 var(--primary);
+}
+
+.nav-item.active:hover {
+  background: transparent;
 }
 
 .content {
   flex: 1;
   overflow-y: auto;
   padding: 20px 24px 40px;
+}
+
+/* ---------- 页面切换：内容依次浮起 ---------- */
+.page-stage {
+  /* 沿导航往下走时，内容从下方浮起 */
+  --rise: 7px;
+}
+
+/* 往上走则从上方落下，让「翻页」有前后之分 */
+.page-stage.enter-down {
+  --rise: -7px;
+}
+
+/*
+ * 每个顶层块各自淡入上浮，按顺序错开——
+ * 一次性整页淡入会像「刷新」，逐个浮起才像「切换」。
+ *
+ * 曲线特意前置（0.85 的 P1y）：卡片是白底，透明度半开时几乎融进背景，
+ * 慢吞吞地淡会有一瞬间像整页空白。所以让它在头三分之一就基本变实，
+ * 剩下的时间只走位移。
+ */
+.page-stage > * {
+  animation: itemIn 0.26s cubic-bezier(0.22, 0.85, 0.32, 1) backwards;
+}
+
+.page-stage > *:nth-child(2) { animation-delay: 0.022s; }
+.page-stage > *:nth-child(3) { animation-delay: 0.044s; }
+.page-stage > *:nth-child(4) { animation-delay: 0.066s; }
+.page-stage > *:nth-child(5) { animation-delay: 0.088s; }
+.page-stage > *:nth-child(6) { animation-delay: 0.11s; }
+.page-stage > *:nth-child(7) { animation-delay: 0.132s; }
+/* 再往后的块统一延迟，避免长页面「排队排到最后才出现」 */
+.page-stage > *:nth-child(n + 8) { animation-delay: 0.15s; }
+
+@keyframes itemIn {
+  from {
+    opacity: 0;
+    transform: translateY(var(--rise));
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 .page-title {
@@ -278,6 +367,9 @@ select {
   color: var(--text);
   background: var(--surface);
   outline: none;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 input:focus,
@@ -324,6 +416,10 @@ button.btn {
   font-family: inherit;
   color: var(--text);
   cursor: pointer;
+  transition:
+    background-color 0.18s ease,
+    border-color 0.18s ease,
+    color 0.18s ease;
 }
 
 button.btn:hover {
@@ -534,6 +630,34 @@ tr:last-child td {
   color: var(--red);
 }
 
+/*
+ * 弹出提示：出现 → 停留 → 淡出，整段走同一个动画。
+ * 时长与 App.tsx 里卸载它的 2600ms 对齐，所以不需要额外的「离场中」状态，
+ * 也就不会出现「先消失再被移除」的二次闪烁。
+ */
+.banner.toast {
+  animation: toastLife 2.6s cubic-bezier(0.22, 0.61, 0.36, 1) forwards;
+}
+
+@keyframes toastLife {
+  0% {
+    opacity: 0;
+    transform: translateY(-7px);
+  }
+  6% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  88% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-5px);
+  }
+}
+
 /* 折叠式排查指引：默认收起，避免长说明把表单挤下去 */
 .field-help {
   margin-top: 14px;
@@ -566,6 +690,20 @@ tr:last-child td {
   font-size: 12px;
   line-height: 1.7;
   color: var(--text-muted);
+}
+
+/* <details> 本身没法过渡，展开时让内容淡入一下，至少不是硬跳 */
+.field-help[open] > ol {
+  animation: fadeIn 0.18s ease;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .field-help > ol > li + li {
@@ -748,4 +886,26 @@ tr:last-child td {
 .sidebar::-webkit-scrollbar-thumb:hover {
   background: #c2cddb;
   background-clip: content-box;
+}
+
+/* ---------- 无障碍：系统里关了动效，就全部退化成直切 ---------- */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  /*
+   * 提示条是个例外：它的动画最后一帧就是 opacity: 0，
+   * 压到 0.01ms 会直接停在「已淡出」，等于什么都看不见。
+   * 这里干脆关掉动画，让它在被移除前始终可见。
+   */
+  .banner.toast {
+    animation: none !important;
+    opacity: 1 !important;
+  }
 }

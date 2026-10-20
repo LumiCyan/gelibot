@@ -1,7 +1,7 @@
 {
   "name": "gelibot",
   "productName": "GeLi Bot",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "GeLi Bot — QQ (SnowLuma/OneBot v11) 与 Minecraft 服务器 RCON 桥接的 Windows 桌面端",
   "main": "dist/main/main.js",
   "private": true,
@@ -20,6 +20,7 @@
     "fetch:wincodesign": "node scripts/fetch-wincodesign.mjs",
     "fetch:nsis": "node scripts/fetch-nsis.mjs",
     "manifest": "node scripts/build-update-manifest.mjs",
+    "ui:shot": "node scripts/ui-shot.mjs",
     "icon": "python scripts/make-icon.py && python scripts/make-ui-assets.py"
   },
   "devDependencies": {

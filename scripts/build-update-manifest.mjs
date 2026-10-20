@@ -140,7 +140,9 @@ function main() {
   let exeSize;
   for (const p of exeCandidates) {
     if (fs.existsSync(p)) {
-      exeOutName = `GeLi Bot v${version}.exe`;
+      // 用连字符而不是空格：GitHub 上传时会把空格替换成点，
+      // 而 exeUrl 是客户端拼下载地址用的，必须与服务器上的存储名逐字节一致。
+      exeOutName = `GeLi-Bot-v${version}.exe`;
       const exeBuf = fs.readFileSync(p);
       exeSha = sha256(exeBuf);
       exeSize = exeBuf.length;

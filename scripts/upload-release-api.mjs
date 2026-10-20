@@ -33,10 +33,13 @@ const REPO = 'gelibot';
 const TOKEN = process.env.GITHUB_TOKEN ?? '';
 
 /**
- * 目录后缀：发布目录按 major.minor 命名（2.0），版本号是完整三段（2.0.0）。
- * 早期发布就是这么建的，保留这个约定，避免改一堆历史路径。
+ * 目录后缀用完整版本号。
+ *
+ * 2.0 那一次用的是 major.minor（release-assets-2.0），结果一个目录里
+ * 混着上一版的 asar 和本版的 patch，很容易拿错文件。从 2.0.1 起
+ * 每个版本一个目录，传什么一目了然。
  */
-const DIR_TAG = VERSION.replace(/\.\d+$/, '');
+const DIR_TAG = VERSION;
 
 const ASSET_DIR = path.join(ROOT, `release-assets-${DIR_TAG}`);
 const EXE_DIR = path.join(ROOT, `dist-release-${DIR_TAG}`);
@@ -50,13 +53,46 @@ const NOTES = path.join(ROOT, 'docs', `RELEASE-v${VERSION}.md`);
  * 是客户端拼 URL 用的，必须与实际存储名逐字节一致，否则 404。
  * 所以统一用连字符命名，并在清单里写同一个值。
  */
+/**
+ * 附件表：完全由 release-manifest.json 推导。
+ *
+ * 早先这里是硬编码的 2.0.0 文件名，换版本就得改代码 —— 而且漏一个
+ * patch 会让老用户「检查更新」拿到 404。现在清单里有几个 patch 就传几个。
+ *
+ * 注意 exe：清单里的 exeUrl 已是无空格名（GitHub 会把空格转成点，
+ * 客户端按清单拼 URL 就会 404），本地文件名则带空格。
+ */
+const ASSET_DIR_MANIFEST = path.join(ASSET_DIR, 'release-manifest.json');
+if (!fs.existsSync(ASSET_DIR_MANIFEST)) {
+  console.error(`\u2718 \u627e\u4e0d\u5230\u6e05\u5355\uff1a${ASSET_DIR_MANIFEST}`);
+  console.error('  \u5148\u8dd1\uff1anode scripts/build-update-manifest.mjs ' + VERSION + ' old-asar ' + path.basename(ASSET_DIR));
+  process.exit(1);
+}
+const manifest = JSON.parse(fs.readFileSync(ASSET_DIR_MANIFEST, 'utf8'));
+if (manifest.version !== VERSION) {
+  console.error(`\u2718 \u6e05\u5355\u7248\u672c\u662f ${manifest.version}\uff0c\u4e0e\u8981\u53d1\u5e03\u7684 ${VERSION} \u4e0d\u4e00\u81f4`);
+  process.exit(1);
+}
+
 const ASSETS = [
-  { path: path.join(ASSET_DIR, 'release-manifest.json'), name: 'release-manifest.json' },
-  { path: path.join(ASSET_DIR, `app-${VERSION}.asar`), name: `app-${VERSION}.asar` },
-  { path: path.join(ASSET_DIR, 'app-1.17.0-to-2.0.0.patch'), name: 'app-1.17.0-to-2.0.0.patch' },
-  { path: path.join(ASSET_DIR, 'app-1.18.0-to-2.0.0.patch'), name: 'app-1.18.0-to-2.0.0.patch' },
-  { path: path.join(EXE_DIR, `GeLi Bot v${VERSION}.exe`), name: `GeLi-Bot-v${VERSION}.exe` },
-  { path: path.join(EXE_DIR, `GeLi Bot Setup ${VERSION}.exe`), name: `GeLi-Bot-Setup-${VERSION}.exe` },
+  { path: ASSET_DIR_MANIFEST, name: 'release-manifest.json' },
+  { path: path.join(ASSET_DIR, manifest.asarUrl), name: manifest.asarUrl },
+  ...manifest.patches.map((p) => ({
+    path: path.join(ASSET_DIR, p.url),
+    name: p.url,
+  })),
+  ...(manifest.exeUrl
+    ? [
+        {
+          path: path.join(EXE_DIR, `GeLi Bot v${VERSION}.exe`),
+          name: manifest.exeUrl,
+        },
+      ]
+    : []),
+  {
+    path: path.join(EXE_DIR, `GeLi Bot Setup ${VERSION}.exe`),
+    name: `GeLi-Bot-Setup-${VERSION}.exe`,
+  },
 ];
 
 if (!TOKEN) {
