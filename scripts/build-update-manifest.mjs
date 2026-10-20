@@ -29,6 +29,26 @@ import { generatePatch } from './bsdiff.mjs';
 /** 打包产物目录（与 build-release.mjs 保持一致） */
 const BUILD_DIR = process.env.GC_OUT_DIR || 'dist-release';
 
+/**
+ * 清单里所有附件地址统一写成**绝对 URL**。
+ *
+ * 为什么不留相对文件名：客户端要自己拼地址，而「GitHub 模式下 baseUrl 只有
+ * owner/repo」这个细节曾经漏过一次，拼出 `lumicyan/gelibot/xxx.exe` 这种
+ * 不是 URL 的字符串，更新直接失败。清单里写绝对地址就不依赖客户端的拼接
+ * 逻辑 —— 老版本客户端（含已发布的 2.0.1）拿到新清单也能正常下载。
+ *
+ * 仓库可用环境变量 GELIBOT_REPO 覆盖（默认 LumiCyan/gelibot）。
+ */
+const REPO = (process.env.GELIBOT_REPO || 'LumiCyan/gelibot').trim();
+
+function assetBase(version) {
+  return `https://github.com/${REPO}/releases/download/v${version}`;
+}
+
+function assetUrl(version, name) {
+  return `${assetBase(version)}/${name}`;
+}
+
 function sha256(buf) {
   return crypto.createHash('sha256').update(buf).digest('hex');
 }
@@ -116,7 +136,7 @@ function main() {
         patches.push({
           from: fromVer,
           to: version,
-          url: patchName,
+          url: assetUrl(version, patchName),
           sha256: r.sha256,
           size: r.size,
         });
@@ -156,10 +176,12 @@ function main() {
     version,
     notes: extractNotes(version),
     publishedAt: new Date().toISOString(),
-    asarUrl: asarOutName,
+    asarUrl: assetUrl(version, asarOutName),
     asarSha256: asarHash,
     fullSize: asarBuf.length,
-    ...(exeOutName ? { exeUrl: exeOutName, exeSha256: exeSha, exeSize } : {}),
+    ...(exeOutName
+      ? { exeUrl: assetUrl(version, exeOutName), exeSha256: exeSha, exeSize }
+      : {}),
     patches,
   };
 

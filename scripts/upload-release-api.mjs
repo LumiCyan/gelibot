@@ -74,18 +74,25 @@ if (manifest.version !== VERSION) {
   process.exit(1);
 }
 
+/**
+ * 清单里的地址现在是绝对 URL（`https://github.com/.../releases/download/v2.0.1/x`），
+ * 上传时要取最后一段当本地文件名与存储名。早期清单写的是相对文件名，
+ * 两种写法都兼容。
+ */
+const assetName = (u) => String(u).split('/').pop();
+
 const ASSETS = [
   { path: ASSET_DIR_MANIFEST, name: 'release-manifest.json' },
-  { path: path.join(ASSET_DIR, manifest.asarUrl), name: manifest.asarUrl },
+  { path: path.join(ASSET_DIR, assetName(manifest.asarUrl)), name: assetName(manifest.asarUrl) },
   ...manifest.patches.map((p) => ({
-    path: path.join(ASSET_DIR, p.url),
-    name: p.url,
+    path: path.join(ASSET_DIR, assetName(p.url)),
+    name: assetName(p.url),
   })),
   ...(manifest.exeUrl
     ? [
         {
           path: path.join(EXE_DIR, `GeLi Bot v${VERSION}.exe`),
-          name: manifest.exeUrl,
+          name: assetName(manifest.exeUrl),
         },
       ]
     : []),

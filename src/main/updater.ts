@@ -27,10 +27,19 @@ import type {
   UpdatePatchEntry,
   UpdateStatus,
 } from '../shared/types';
-import { compareVersions, isUpdateUrlAllowed, mirrorCandidates, normalizeVersion } from './version';
+import {
+  compareVersions,
+  customBaseUrl,
+  githubReleaseBase,
+  isUpdateUrlAllowed,
+  mirrorCandidates,
+  normalizeRepo,
+  normalizeVersion,
+  resolveUpdateAssetUrl,
+} from './version';
 
 /** 默认更新源（GitHub 仓库，可被设置覆盖） */
-const DEFAULT_REPO = 'lumicyan/gelibot';
+const DEFAULT_REPO = 'LumiCyan/gelibot';
 
 /** 清单文件名：每个发布版本附带的元数据 */
 const MANIFEST_NAME = 'release-manifest.json';
@@ -99,18 +108,37 @@ async function downloadOnce(url: string, onProgress?: (done: number, total: numb
   return Buffer.concat(chunks.map((c) => Buffer.from(c)));
 }
 
-/** 拼接更新源基础 URL（去掉末尾斜杠，统一无尾斜杠） */
-function baseUrl(channel: UpdateChannel): string {
-  return (channel.customUrl || channel.repoUrl || '').replace(/\/+$/, '');
+/**
+ * 取出配置里的 GitHub 仓库，归一化成 `owner/name`。
+ *
+ * 空值回落到默认仓库；写了但不合法（比如只填了仓库名、填了个中文名）
+ * 直接抛错 —— 沉默地回落到默认仓库会让用户以为「检查更新成功了」，
+ * 实际查的是别人的仓库。
+ */
+function configuredRepo(channel: UpdateChannel): string {
+  const raw = (channel.repoUrl ?? '').trim();
+  if (!raw) return DEFAULT_REPO;
+  const normalized = normalizeRepo(raw);
+  if (!normalized) {
+    throw new Error(
+      `更新源仓库格式不正确：${raw}（应填写 owner/name，例如 ${DEFAULT_REPO}）`,
+    );
+  }
+  return normalized;
 }
 
-/** 计算 GitHub 清单下载地址（走 releases 下载直链） */
+/**
+ * 计算 GitHub 清单下载地址（走 releases 下载直链）。
+ *
+ * 注意这里必须产出一个**完整的 https 地址**，不能是 `owner/name`。
+ */
 function manifestUrl(channel: UpdateChannel): string {
-  if (channel.customUrl) {
-    return `${baseUrl(channel)}/${MANIFEST_NAME}`;
+  const custom = customBaseUrl(channel);
+  if (custom) {
+    return `${custom}/${MANIFEST_NAME}`;
   }
-  const repo = channel.repoUrl || DEFAULT_REPO;
-  return `https://github.com/${repo}/releases/latest/download/${MANIFEST_NAME}`;
+  // latest 而不是具体 tag：检查更新的目的就是拿「最新那版」的清单
+  return `${githubReleaseBase(configuredRepo(channel))}/${MANIFEST_NAME}`;
 }
 
 /**
@@ -248,8 +276,27 @@ export class Updater {
       return { ok: false, error: '当前没有可用的更新' };
     }
 
-    const manifest = await this.fetchManifest();
+    let manifest: UpdateManifest;
+    try {
+      manifest = await this.fetchManifest();
+    } catch (err) {
+      // 重新拉清单失败（源改了、附件没了）也要落到「出错」而不是抛出去
+      const msg = (err as Error).message;
+      this.fail(msg, 'download');
+      return { ok: false, error: msg };
+    }
     fs.mkdirSync(this.workDir, { recursive: true });
+
+    // 仓库名写错时立刻报出来，别等到下载才看见「地址不合法」
+    if (!customBaseUrl(this.channel)) {
+      try {
+        configuredRepo(this.channel);
+      } catch (err) {
+        const msg = (err as Error).message;
+        this.fail(msg, 'download');
+        return { ok: false, error: msg };
+      }
+    }
 
     // 便携版无法靠差量持久化（解压到临时目录），必须整包替换 exe
     if (this.isPortable()) {
@@ -261,10 +308,11 @@ export class Updater {
 
     if (patch && patch.sha256) {
       // 差量：下载 .patch，本地用 bspatch 打补丁生成新 asar
-      const patchUrl = this.resolveAssetUrl(patch.url);
+      const patchUrl = this.resolveAssetUrl(patch.url, manifest.version);
       if (!isUpdateUrlAllowed(patchUrl)) {
-        this.fail(`差量包地址不合法：${patchUrl}`, 'download');
-        return { ok: false, error: `差量包地址不合法：${patchUrl}` };
+        const msg = `差量包地址不合法：${patchUrl}（请检查「连接设置 → 软件更新源」）`;
+        this.fail(msg, 'download');
+        return { ok: false, error: msg };
       }
 
       this.setStatus({
@@ -333,10 +381,11 @@ export class Updater {
 
   /** 便携版：下载完整 exe 整包 */
   private async downloadExe(manifest: UpdateManifest): Promise<{ ok: boolean; error?: string; fullDownload?: boolean }> {
-    const url = this.resolveAssetUrl(manifest.exeUrl);
+    const url = this.resolveAssetUrl(manifest.exeUrl, manifest.version);
     if (!url || !isUpdateUrlAllowed(url)) {
-      this.fail(`便携版完整包地址不合法：${url ?? '(空)'}`, 'download');
-      return { ok: false, error: `便携版完整包地址不合法：${url ?? '(空)'}` };
+      const msg = `便携版完整包地址不合法：${url || '(空)'}（清单里的 exeUrl 缺失，或更新源配置有误）`;
+      this.fail(msg, 'download');
+      return { ok: false, error: msg };
     }
 
     this.setStatus({
@@ -373,10 +422,11 @@ export class Updater {
 
   /** 全量下载最新 app.asar */
   private async downloadFull(manifest: UpdateManifest): Promise<{ ok: boolean; error?: string; fullDownload?: boolean }> {
-    const url = this.resolveAssetUrl(manifest.asarUrl);
+    const url = this.resolveAssetUrl(manifest.asarUrl, manifest.version);
     if (!url || !isUpdateUrlAllowed(url)) {
-      this.fail(`完整包地址不合法：${url ?? '(空)'}`, 'download');
-      return { ok: false, error: `完整包地址不合法：${url ?? '(空)'}` };
+      const msg = `完整包地址不合法：${url || '(空)'}（清单里的 asarUrl 缺失，或更新源配置有误）`;
+      this.fail(msg, 'download');
+      return { ok: false, error: msg };
     }
 
     this.setStatus({
@@ -411,11 +461,15 @@ export class Updater {
     return { ok: true, fullDownload: true };
   }
 
-  /** 解析清单里的相对资产地址为绝对 URL */
-  private resolveAssetUrl(asset: string | undefined): string {
-    if (!asset) return '';
-    if (/^https?:\/\//i.test(asset)) return asset;
-    return `${baseUrl(this.channel)}/${asset.replace(/^\/+/, '')}`;
+  /**
+   * 解析清单里的资产地址为绝对 URL。
+   *
+   * 真正的拼装规则在 version.ts 的 `resolveUpdateAssetUrl` 里（纯函数，可单测）：
+   * 这个 bug 就出在拼装环节，必须让单测直接盯着那个函数，而不是隔着
+   * electron 依赖的类方法。
+   */
+  private resolveAssetUrl(asset: string | undefined, version?: string): string {
+    return resolveUpdateAssetUrl(this.channel, asset, version);
   }
 
   /** 便携版 / 安装版中 app.asar 的路径 */

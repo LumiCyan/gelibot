@@ -36,6 +36,40 @@ node scripts/push-via-api.mjs v2.0.1
 后续继续用本脚本推送没有问题（它永远以远端树为底），但**不要在这台机器上 `git pull`**，
 会因分叉冲突。要拉取要么换机器，要么也用 API 读。
 
+## 坑五（2.0.1 复盘）：清单里写相对地址 = 老用户更新必挂
+
+2.0.1 发布后，2.0.0 用户点「下载更新」直接报：
+
+```
+便携版完整包地址不合法：lumicyan/gelibot/GeLi-Bot-v2.0.1.exe
+```
+
+不是网络问题，是**客户端拼地址拼错了**：
+
+- 清单里的 `exeUrl` 只有文件名 `GeLi-Bot-v2.0.1.exe`（这样写没问题）；
+- 客户端要把它拼成绝对地址，旧实现是「拼到 baseUrl」；
+- 而 GitHub 模式下 `baseUrl = customUrl || repoUrl`，`repoUrl` 只有 `owner/repo`，
+  于是拼出 `lumicyan/gelibot/xxx.exe` —— 不是 URL，`isUpdateUrlAllowed` 一律拒绝。
+
+三处一起改才彻底：
+
+1. **客户端**：`resolveUpdateAssetUrl()`（`src/main/version.ts`，纯函数）按
+   「绝对地址原样放行 / 自定义源拼根目录 / GitHub 拼 `releases/download/v<版本>/`」三分支解析；
+   `normalizeRepo()` 兼容 `owner/name`、整条网址、带 `.git`、首尾空格。
+2. **发布脚本**：`build-update-manifest.mjs` 起清单里所有地址一律写**绝对 URL**，
+   不再依赖客户端拼接能力。
+3. **已发布的清单就地换掉**：卡住的是老客户端，发新版救不了它们。用
+   `scripts/republish-manifest.mjs <版本>` 只替换 `release-manifest.json` 附件
+   （删旧 + 重传 + 回读核对），其它附件不动。
+
+```bash
+export GITHUB_TOKEN=$(printf "protocol=https\nhost=github.com\n\n" | git credential fill | grep '^password=' | cut -d= -f2-)
+node scripts/republish-manifest.mjs 2.0.1
+```
+
+记住这条：**清单是契约，不是草稿。** 任何字段写法的变化，都要考虑「已经装出去的老版本
+能不能读懂」，因为它们没法回滚重发。
+
 ## 坑四（2.0.1 新增）：发布目录别混版
 
 2.0 的资产放在 `release-assets-2.0`（major.minor 命名），结果同一目录里躺着

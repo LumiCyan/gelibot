@@ -541,8 +541,12 @@ export function ConnectionPage({
             onChange={(e) =>
               patch({ update: { ...config.update, repoUrl: e.target.value } })
             }
-            placeholder="lumicyan/gelibot"
+            placeholder="LumiCyan/gelibot"
           />
+          <p className="hint">
+            也可以直接粘贴仓库网址（<span className="mono">https://github.com/owner/name</span>
+            ），末尾带 <span className="mono">.git</span> 也能识别。
+          </p>
         </div>
 
         <div className="field">
